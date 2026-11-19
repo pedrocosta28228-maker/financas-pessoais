@@ -6,7 +6,8 @@ Aplicativo web pessoal para organização de finanças (entradas, saídas, dívi
 - **Sistema de Login e Cadastro:** senhas protegidas com hash criptográfico (`scrypt` + `salt`) e sessão via **JWT**.
 - **Controle Geral e Mensal:** visão do **Total Geral** por padrão com navegação limpa mês a mês, calculando **Entradas**, **Saídas Pagas**, **Ainda Vai Sair (A Pagar / Dívidas)**, **Saldo Total** e **Saldo Previsto**.
 - **Parcelamento Automático de Dívidas:** gere automaticamente N parcelas mensais com a data de vencimento escolhida (usando Transação SQL no SQLite) e acompanhe o total pendente.
-- **Gestão de Lançamentos:** adicione entradas (salário, extras), saídas e dívidas, alterne rapidamente entre *Pago* e *Pendente* e filtre por tipo.
+- **Gráficos Visuais:** gráfico de rosca (*Raio-X do dinheiro*: livre, pago e a pagar) e gráfico de barras comparativo (resumo geral e gastos por categoria).
+- **Gestão de Lançamentos:** modal rápido de **Novo Lançamento**, busca por descrição/categoria, filtros com contador e botão de 1 clique para marcar contas e dívidas como pagas.
 - **Privacidade local:** o banco de dados `financas.db` e o arquivo `.env` ficam apenas no seu computador (ignorados pelo `.gitignore`).
 
 ## Tecnologias
