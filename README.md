@@ -1,22 +1,46 @@
 # Finanças Pessoais — App Web Local
 
-Aplicativo web pessoal para organização de finanças (entradas, saídas, dívidas e controle mensal), com autenticação segura e banco de dados local.
+Aplicativo web pessoal para organização de finanças (entradas, saídas, dívidas e controle mensal), com autenticação segura e banco de dados local em SQLite.
+
+## Funcionalidades
+- **Sistema de Login e Cadastro:** senhas protegidas com hash criptográfico (`scrypt` + `salt`) e sessão via **JWT**.
+- **Controle Mensal:** filtro por mês com cálculo automático de **Entradas**, **Saídas Pagas**, **Ainda Vai Sair (A Pagar / Dívidas)**, **Saldo Atual** e **Saldo Previsto**.
+- **Gestão de Lançamentos:** adicione entradas (salário, extras), saídas e dívidas, alterne rapidamente entre *Pago* e *Pendente* e filtre por tipo.
+- **Privacidade local:** o banco de dados `financas.db` e o arquivo `.env` ficam apenas no seu computador (ignorados pelo `.gitignore`).
 
 ## Tecnologias
-- **Frontend:** React + Vite
+- **Frontend:** React 19 + Vite
 - **Backend:** Node.js + Express
-- **Banco de Dados:** SQLite (SQL)
-- **Autenticação:** Hash de senha + JWT (JSON Web Token)
+- **Banco de Dados:** SQLite (`node:sqlite`) com SQL e Prepared Statements
+- **Autenticação:** `crypto.scryptSync` + JSON Web Token (JWT)
 
 ## Estrutura do Projeto
 ```text
 financeiro/
-├── backend/   # Servidor Node.js, rotas da API, autenticação e banco SQLite
-└── frontend/  # Interface web em React
+├── backend/         # Servidor Node.js, rotas da API, autenticação e banco SQLite
+├── frontend/        # Interface web em React (Login + Dashboard)
+└── iniciar-app.bat  # Atalho rápido no Windows para abrir o app
 ```
+
+## Como rodar localmente
+1. Configure a chave secreta do backend:
+   ```bash
+   cp backend/.env.example backend/.env
+   ```
+2. Instale as dependências:
+   ```bash
+   npm --prefix backend install
+   npm --prefix frontend install
+   ```
+3. Inicie o backend e o frontend (em dois terminais) ou dê duplo clique em `iniciar-app.bat`:
+   ```bash
+   npm --prefix backend start
+   npm --prefix frontend run dev
+   ```
+4. Acesse no navegador: `http://localhost:5173`
 
 ## Progresso do Desenvolvimento
 - [x] Configuração do ambiente (Node.js, Git e `.gitignore`)
 - [x] Backend em Node.js + tabelas SQL no SQLite
 - [x] Sistema de Cadastro e Login seguro (Hash + JWT)
-- [ ] Interface em React (Login + Dashboard de Entradas, Saídas e Dívidas)
+- [x] Interface em React (Login + Dashboard de Entradas, Saídas e Dívidas)
