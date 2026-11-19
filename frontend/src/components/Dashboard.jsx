@@ -353,21 +353,23 @@ export default function Dashboard({ usuario, onSair }) {
           )}
         </section>
 
-        {/* Cards de resumo */}
+        {/* Cards de resumo (3 cards limpos e diretos) */}
         <section className="summary-grid">
-          <div className="card card-entrada">
+          <div className="card card-saldo">
             <span className="card-label">
-              {modoGeral ? 'Entradas (Total)' : 'Entradas do Mês'}
+              {modoGeral ? 'Saldo Total (Quanto Tenho)' : 'Saldo do Mês'}
             </span>
-            <strong className="card-value positive">
-              {formatarMoeda(resumo.entradasRecebidas)}
+            <strong
+              className={`card-value ${resumo.saldoReal >= 0 ? 'positive' : 'negative'}`}
+            >
+              {formatarMoeda(resumo.saldoReal)}
             </strong>
             <span className="card-sub">
               {resumo.entradasPrevistas > 0
-                ? `+ ${formatarMoeda(resumo.entradasPrevistas)} a receber`
+                ? `+ ${formatarMoeda(resumo.entradasPrevistas)} previsto para entrar`
                 : modoGeral
-                  ? 'Tudo que já entrou até hoje'
-                  : 'Tudo que já entrou no mês'}
+                  ? 'Atualiza automaticamente ao pagar ou adiantar'
+                  : 'Entradas menos saídas pagas neste mês'}
             </span>
           </div>
 
@@ -378,7 +380,7 @@ export default function Dashboard({ usuario, onSair }) {
             <strong className="card-value negative">
               {formatarMoeda(resumo.saidasPagas)}
             </strong>
-            <span className="card-sub">O que já saiu do seu bolso</span>
+            <span className="card-sub">O que já saiu do seu saldo</span>
           </div>
 
           <div className="card card-pendente">
@@ -388,21 +390,6 @@ export default function Dashboard({ usuario, onSair }) {
             </strong>
             <span className="card-sub">
               Dívidas pendentes: {formatarMoeda(resumo.dividasPendentes)}
-            </span>
-          </div>
-
-          <div className="card card-saldo">
-            <span className="card-label">
-              {modoGeral ? 'Saldo Total (Quanto Tenho)' : 'Saldo Atual do Mês'}
-            </span>
-            <strong
-              className={`card-value ${resumo.saldoReal >= 0 ? 'positive' : 'negative'}`}
-            >
-              {formatarMoeda(resumo.saldoReal)}
-            </strong>
-            <span className="card-sub">
-              Previsto (após pagar tudo):{' '}
-              <strong>{formatarMoeda(resumo.saldoPrevisto)}</strong>
             </span>
           </div>
         </section>

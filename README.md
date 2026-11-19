@@ -41,8 +41,18 @@ financeiro/
    ```
 4. Acesse no navegador: `http://localhost:5173`
 
-## Progresso do Desenvolvimento
+## Progresso do Desenvolvimento (v1 — Concluída)
 - [x] Configuração do ambiente (Node.js, Git e `.gitignore`)
 - [x] Backend em Node.js + tabelas SQL no SQLite
 - [x] Sistema de Cadastro e Login seguro (Hash + JWT)
-- [x] Interface em React (Login + Dashboard de Entradas, Saídas e Dívidas)
+- [x] Interface em React (Login + Dashboard clean com gráfico de balanço)
+- [x] Parcelamento automático de dívidas agrupadas em acordeão + edição
+- [x] Pop-up ao pagar/adiantar parcelas (com opção de abater do saldo ou marcar pago por fora + desfazer)
+
+## Próximos Passos — Lista de Afazeres (v2)
+- [ ] **Barra lateral de navegação:** separar em abas (*Visão Geral*, *Entradas/Contas*, *Saídas*, *Dívidas*, *Despesas Fixas*, *Estatísticas* e *Metas*)
+- [ ] **Onde está meu dinheiro (Contas e Rendimentos):** detalhar em qual banco/cofrinho cada valor está (ex.: R$ 1.000 rendendo % do CDI, R$ 400 no cofrinho, R$ 100 para uso diário)
+- [ ] **Salário fixo recorrente ("Vai Entrar"):** prever o salário dos próximos meses com edição rápida para horas extras
+- [ ] **Despesas fixas mensais:** controle e resumo das contas recorrentes de todo mês
+- [ ] **Aba de Estatísticas e Projeção:** histórico de tudo que já entrou, gráfico de evolução do saldo futuro com base no salário e comparativo mensal Salário × Dívidas
+- [ ] **Metas financeiras:** definir quanto deseja juntar e acompanhar a barra de progresso
