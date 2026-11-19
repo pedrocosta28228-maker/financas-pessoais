@@ -65,7 +65,7 @@ export const api = {
   me: () => requisicao('/auth/me'),
 
   listarLancamentos: (mes) =>
-    requisicao(`/lancamentos?mes=${encodeURIComponent(mes)}`),
+    requisicao(mes ? `/lancamentos?mes=${encodeURIComponent(mes)}` : '/lancamentos'),
 
   criarLancamento: (dados) =>
     requisicao('/lancamentos', {

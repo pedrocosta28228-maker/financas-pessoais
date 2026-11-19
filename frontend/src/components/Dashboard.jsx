@@ -20,13 +20,6 @@ function formatarData(dataIso) {
   return `${dia}/${mes}/${ano}`;
 }
 
-function mesAtualIso() {
-  const hoje = new Date();
-  const ano = hoje.getFullYear();
-  const mes = String(hoje.getMonth() + 1).padStart(2, '0');
-  return `${ano}-${mes}`;
-}
-
 function hojeIso() {
   const hoje = new Date();
   const ano = hoje.getFullYear();
@@ -36,7 +29,8 @@ function hojeIso() {
 }
 
 export default function Dashboard({ usuario, onSair }) {
-  const [mes, setMes] = useState(mesAtualIso);
+  // Vazio ('') = padrão "Ver tudo" (Total Geral). Quando preenchido ('YYYY-MM'), filtra aquele mês.
+  const [mes, setMes] = useState('');
   const [lancamentos, setLancamentos] = useState([]);
   const [resumo, setResumo] = useState({
     entradasRecebidas: 0,
@@ -110,9 +104,10 @@ export default function Dashboard({ usuario, onSair }) {
       setTitulo('');
       setValor('');
 
-      // Se o lançamento foi em outro mês, pula para o mês dele; senão recarrega o atual
+      // Se estiver filtrando um mês específico diferente do lançamento, muda pra ele;
+      // se estiver em "Ver tudo" (padrão), continua vendo o total geral!
       const mesDoLancamento = data.slice(0, 7);
-      if (mesDoLancamento !== mes) {
+      if (mes && mesDoLancamento !== mes) {
         setMes(mesDoLancamento);
       } else {
         await carregarDados(mes);
@@ -143,6 +138,8 @@ export default function Dashboard({ usuario, onSair }) {
     }
   }
 
+  const modoGeral = !mes;
+
   const lancamentosFiltrados = lancamentos.filter((item) => {
     if (filtro === 'todos') return true;
     if (filtro === 'pendente') return item.status === 'pendente';
@@ -162,14 +159,23 @@ export default function Dashboard({ usuario, onSair }) {
         </div>
 
         <div className="topbar-right">
-          <label className="month-picker">
-            <span>Mês:</span>
-            <input
-              type="month"
-              value={mes}
-              onChange={(e) => setMes(e.target.value)}
-            />
-          </label>
+          <div className="period-controls">
+            <button
+              type="button"
+              className={modoGeral ? 'period-btn active' : 'period-btn'}
+              onClick={() => setMes('')}
+            >
+              Ver tudo (Total)
+            </button>
+            <label className="month-picker">
+              <span>Filtrar mês:</span>
+              <input
+                type="month"
+                value={mes}
+                onChange={(e) => setMes(e.target.value)}
+              />
+            </label>
+          </div>
           <button type="button" className="btn-outline" onClick={onSair}>
             Sair
           </button>
@@ -179,22 +185,28 @@ export default function Dashboard({ usuario, onSair }) {
       <main className="container">
         {erro && <div className="alert-error">{erro}</div>}
 
-        {/* Cards de resumo do mês */}
+        {/* Cards de resumo */}
         <section className="summary-grid">
           <div className="card card-entrada">
-            <span className="card-label">Entradas (Positivo)</span>
+            <span className="card-label">
+              {modoGeral ? 'Entradas (Total)' : 'Entradas do Mês'}
+            </span>
             <strong className="card-value positive">
               {formatarMoeda(resumo.entradasRecebidas)}
             </strong>
             <span className="card-sub">
               {resumo.entradasPrevistas > 0
                 ? `+ ${formatarMoeda(resumo.entradasPrevistas)} a receber`
-                : 'Tudo que já entrou no mês'}
+                : modoGeral
+                  ? 'Tudo que já entrou até hoje'
+                  : 'Tudo que já entrou no mês'}
             </span>
           </div>
 
           <div className="card card-saida">
-            <span className="card-label">Saídas Pagas (Negativo)</span>
+            <span className="card-label">
+              {modoGeral ? 'Saídas Pagas (Total)' : 'Saídas Pagas do Mês'}
+            </span>
             <strong className="card-value negative">
               {formatarMoeda(resumo.saidasPagas)}
             </strong>
@@ -212,7 +224,9 @@ export default function Dashboard({ usuario, onSair }) {
           </div>
 
           <div className="card card-saldo">
-            <span className="card-label">Saldo Atual do Mês</span>
+            <span className="card-label">
+              {modoGeral ? 'Saldo Total (Quanto Tenho)' : 'Saldo Atual do Mês'}
+            </span>
             <strong
               className={`card-value ${resumo.saldoReal >= 0 ? 'positive' : 'negative'}`}
             >
@@ -334,10 +348,10 @@ export default function Dashboard({ usuario, onSair }) {
             </form>
           </section>
 
-          {/* Lista de lançamentos do mês */}
+          {/* Lista de lançamentos */}
           <section className="panel">
             <div className="panel-header">
-              <h2>Lançamentos do mês</h2>
+              <h2>{modoGeral ? 'Todos os lançamentos' : 'Lançamentos do mês'}</h2>
               <div className="filter-pills">
                 {[
                   { id: 'todos', label: 'Todos' },
