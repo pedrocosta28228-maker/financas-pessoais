@@ -17,6 +17,6 @@ financeiro/
 
 ## Progresso do Desenvolvimento
 - [x] Configuração do ambiente (Node.js, Git e `.gitignore`)
-- [ ] Backend em Node.js + tabelas SQL no SQLite
-- [ ] Sistema de Cadastro e Login seguro (Hash + JWT)
+- [x] Backend em Node.js + tabelas SQL no SQLite
+- [x] Sistema de Cadastro e Login seguro (Hash + JWT)
 - [ ] Interface em React (Login + Dashboard de Entradas, Saídas e Dívidas)
