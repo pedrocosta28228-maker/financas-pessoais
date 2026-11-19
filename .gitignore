@@ -1,0 +1,22 @@
+# Dependências instaladas pelo npm (são pesadas e podem ser reinstaladas com "npm install")
+node_modules/
+
+# Arquivos de build gerados automaticamente
+dist/
+build/
+
+# SEUS DADOS PRIVADOS — nunca vão para o GitHub!
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Segredos e chaves de autenticação (ex.: segredo do JWT)
+.env
+.env.local
+
+# Arquivos temporários do sistema operacional e editor
+.DS_Store
+Thumbs.db
+*.log
