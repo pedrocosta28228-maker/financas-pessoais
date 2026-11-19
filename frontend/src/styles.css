@@ -226,18 +226,62 @@ body {
   position: sticky;
   top: 0;
   height: 100vh;
+  transition: width 0.2s ease, padding 0.2s ease;
+}
+
+.sidebar.collapsed {
+  width: 72px;
+  padding: 20px 10px;
+}
+
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar.collapsed .sidebar-top {
+  justify-content: center;
 }
 
 .sidebar-brand {
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 4px 6px;
+  padding: 4px 4px;
+  min-width: 0;
 }
 
 .sidebar-brand-text h1 {
-  font-size: 1.05rem;
+  font-size: 1rem;
   line-height: 1.2;
+  white-space: nowrap;
+}
+
+.sidebar-toggle {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-toggle:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.sidebar-toggle svg {
+  width: 17px;
+  height: 17px;
 }
 
 .sidebar-nav {
@@ -264,6 +308,11 @@ body {
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 11px;
+}
+
 .nav-item:hover {
   background: rgba(31, 41, 55, 0.65);
   color: var(--text);
@@ -276,6 +325,7 @@ body {
 }
 
 .nav-icon {
+  position: relative;
   width: 18px;
   height: 18px;
   display: inline-flex;
@@ -289,12 +339,24 @@ body {
   height: 18px;
 }
 
+.nav-dot {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--amber);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
 .nav-label {
   flex: 1;
+  white-space: nowrap;
 }
 
 .nav-badge {
-  background: rgba(245, 158, 11, 0.2);
+  background: rgba(245, 158, 11, 0.22);
   color: #fcd34d;
   font-size: 0.72rem;
   font-weight: 700;
@@ -317,6 +379,14 @@ body {
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-logout svg {
+  width: 17px;
+  height: 17px;
 }
 
 .btn-logout:hover {
@@ -406,7 +476,8 @@ body {
     flex-direction: column;
   }
 
-  .sidebar {
+  .sidebar,
+  .sidebar.collapsed {
     width: 100%;
     height: auto;
     position: static;
@@ -414,6 +485,10 @@ body {
     border-bottom: 1px solid var(--border);
     padding: 14px 16px;
     gap: 12px;
+  }
+
+  .sidebar-toggle {
+    display: none;
   }
 
   .sidebar-nav {

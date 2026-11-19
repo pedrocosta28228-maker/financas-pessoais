@@ -84,7 +84,20 @@ function moverMes(mesIso, delta) {
 }
 
 export default function Dashboard({ usuario, onSair }) {
+  const chaveVistas = `financeiro_dividas_vistas_${usuario.id}`;
+
   const [secaoAtiva, setSecaoAtiva] = useState('visao_geral');
+  const [sidebarRecolhida, setSidebarRecolhida] = useState(() => {
+    return localStorage.getItem('financeiro_sidebar_recolhida') === 'true';
+  });
+  const [dividasVistas, setDividasVistas] = useState(() => {
+    try {
+      const salvo = JSON.parse(localStorage.getItem(chaveVistas) || '[]');
+      return Array.isArray(salvo) ? salvo : [];
+    } catch {
+      return [];
+    }
+  });
   const [mes, setMes] = useState(''); // '' = Tudo (Total Geral)
   const [lancamentos, setLancamentos] = useState([]);
   const [resumo, setResumo] = useState({
@@ -190,6 +203,35 @@ export default function Dashboard({ usuario, onSair }) {
 
   // Resumos específicos para as abas
   const dividasAgrupadas = agruparLancamentos(listaDividas);
+  const chavesDividasAtuais = dividasAgrupadas.map((e) =>
+    e.tipoItem === 'unico' ? `item:${e.item.id}` : `grupo:${e.grupoId}`
+  );
+
+  // Conta apenas dívidas novas (que ainda não foram vistas na aba Dívidas)
+  const novasDividasNaoVistas = chavesDividasAtuais.filter(
+    (chave) => !dividasVistas.includes(chave)
+  ).length;
+
+  // Assim que você abre a aba Dívidas (ou já está nela), marca todas as dívidas atuais como vistas
+  useEffect(() => {
+    if (secaoAtiva !== 'dividas' || chavesDividasAtuais.length === 0) return;
+
+    const temNova = chavesDividasAtuais.some((c) => !dividasVistas.includes(c));
+    if (!temNova) return;
+
+    const atualizadas = Array.from(new Set([...dividasVistas, ...chavesDividasAtuais]));
+    setDividasVistas(atualizadas);
+    localStorage.setItem(chaveVistas, JSON.stringify(atualizadas));
+  }, [secaoAtiva, chavesDividasAtuais.join('|')]);
+
+  function alternarSidebar() {
+    setSidebarRecolhida((atual) => {
+      const proximo = !atual;
+      localStorage.setItem('financeiro_sidebar_recolhida', String(proximo));
+      return proximo;
+    });
+  }
+
   const gruposDividasPendentes = dividasAgrupadas.filter((e) =>
     e.tipoItem === 'unico' ? e.item.status === 'pendente' : e.qtdPendentes > 0
   ).length;
@@ -245,7 +287,9 @@ export default function Dashboard({ usuario, onSair }) {
         usuario={usuario}
         secaoAtiva={secaoAtiva}
         onTrocarSecao={setSecaoAtiva}
-        contadores={{ dividasPendentes: gruposDividasPendentes }}
+        novasDividas={novasDividasNaoVistas}
+        recolhida={sidebarRecolhida}
+        onAlternarRecolhida={alternarSidebar}
         onSair={onSair}
       />
 

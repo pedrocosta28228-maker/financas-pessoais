@@ -1,6 +1,6 @@
 /**
- * Barra lateral de navegação (Sidebar).
- * Separa o app em abas organizadas mantendo a Visão Geral limpa.
+ * Barra lateral de navegação (Sidebar) com modo recolhido/expandido
+ * e notificação de novas dívidas (some ao abrir a aba Dívidas).
  */
 const ITENS_MENU = [
   {
@@ -72,26 +72,45 @@ export default function Sidebar({
   usuario,
   secaoAtiva,
   onTrocarSecao,
-  contadores,
+  novasDividas,
+  recolhida,
+  onAlternarRecolhida,
   onSair,
 }) {
   return (
-    <aside className="sidebar">
-      <div className="sidebar-brand">
-        <div className="logo-badge small">R$</div>
-        <div className="sidebar-brand-text">
-          <h1>Minhas Finanças</h1>
-          <span className="greeting">Olá, {usuario.nome}</span>
-        </div>
+    <aside className={recolhida ? 'sidebar collapsed' : 'sidebar'}>
+      <div className="sidebar-top">
+        {!recolhida && (
+          <div className="sidebar-brand">
+            <div className="logo-badge small">R$</div>
+            <div className="sidebar-brand-text">
+              <h1>Minhas Finanças</h1>
+              <span className="greeting">Olá, {usuario.nome}</span>
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={onAlternarRecolhida}
+          title={recolhida ? 'Expandir barra lateral' : 'Recolher barra lateral'}
+          aria-label={recolhida ? 'Expandir barra lateral' : 'Recolher barra lateral'}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            {recolhida ? (
+              <path d="m9 18 6-6-6-6" />
+            ) : (
+              <path d="m15 18-6-6 6-6" />
+            )}
+          </svg>
+        </button>
       </div>
 
       <nav className="sidebar-nav" aria-label="Menu principal">
         {ITENS_MENU.map((item) => {
           const ativo = secaoAtiva === item.id;
-          const badgeNumero =
-            item.id === 'dividas' && contadores.dividasPendentes > 0
-              ? contadores.dividasPendentes
-              : null;
+          const mostrarNotificacao = item.id === 'dividas' && novasDividas > 0;
 
           return (
             <button
@@ -99,11 +118,19 @@ export default function Sidebar({
               type="button"
               className={ativo ? 'nav-item active' : 'nav-item'}
               onClick={() => onTrocarSecao(item.id)}
+              title={recolhida ? item.label : undefined}
             >
-              <span className="nav-icon">{item.icone}</span>
-              <span className="nav-label">{item.label}</span>
-              {badgeNumero !== null && (
-                <span className="nav-badge">{badgeNumero}</span>
+              <span className="nav-icon">
+                {item.icone}
+                {recolhida && mostrarNotificacao && (
+                  <span className="nav-dot" aria-hidden="true" />
+                )}
+              </span>
+
+              {!recolhida && <span className="nav-label">{item.label}</span>}
+
+              {!recolhida && mostrarNotificacao && (
+                <span className="nav-badge">{novasDividas}</span>
               )}
             </button>
           );
@@ -111,8 +138,21 @@ export default function Sidebar({
       </nav>
 
       <div className="sidebar-footer">
-        <button type="button" className="btn-logout" onClick={onSair}>
-          Sair da conta
+        <button
+          type="button"
+          className="btn-logout"
+          onClick={onSair}
+          title={recolhida ? 'Sair da conta' : undefined}
+        >
+          {recolhida ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+          ) : (
+            'Sair da conta'
+          )}
         </button>
       </div>
     </aside>
