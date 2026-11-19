@@ -533,28 +533,14 @@ body {
   gap: 10px;
 }
 
-/* ==================== GRÁFICOS ==================== */
-.charts-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.chart-card {
+/* ==================== GRÁFICO ÚNICO DE BALANÇO ==================== */
+.balance-chart {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 20px;
 }
 
-.chart-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.chart-header h2 {
+.balance-header h2 {
   margin-bottom: 4px;
 }
 
@@ -563,17 +549,17 @@ body {
   color: var(--muted);
 }
 
-.donut-layout {
+.balance-body {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 32px;
   flex-wrap: wrap;
 }
 
 .donut-wrapper {
   position: relative;
-  width: 175px;
-  height: 175px;
+  width: 190px;
+  height: 190px;
   flex-shrink: 0;
   margin: 0 auto;
 }
@@ -595,35 +581,62 @@ body {
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 18px;
+  padding: 20px;
 }
 
 .donut-center-label {
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   color: var(--muted);
 }
 
 .donut-center-value {
-  font-size: 0.98rem;
+  font-size: 1.05rem;
   font-weight: 700;
-  margin-top: 2px;
+  margin-top: 3px;
 }
 
-.donut-legend {
+.balance-details {
   flex: 1;
-  min-width: 210px;
+  min-width: 260px;
   display: flex;
   flex-direction: column;
+  gap: 16px;
+}
+
+.stacked-bar {
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+}
+
+.stacked-segment {
+  height: 100%;
+  transition: width 0.35s ease;
+}
+
+.stacked-empty {
+  width: 100%;
+  height: 100%;
+  background: var(--surface-2);
+}
+
+.balance-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
 
-.legend-row {
+.balance-legend-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
 }
@@ -631,26 +644,34 @@ body {
 .legend-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .legend-dot {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   border-radius: 999px;
   flex-shrink: 0;
 }
 
 .legend-label {
-  font-size: 0.84rem;
+  font-size: 0.86rem;
+  font-weight: 600;
   color: var(--text);
+}
+
+.legend-desc {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 2px;
 }
 
 .legend-right {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 0.85rem;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 0.9rem;
 }
 
 .legend-pct {
@@ -658,83 +679,117 @@ body {
   font-size: 0.76rem;
 }
 
-.donut-warning {
-  font-size: 0.8rem;
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-
-/* Barras horizontais */
-.mini-tabs {
-  display: inline-flex;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 3px;
-  gap: 3px;
-}
-
-.mini-tab {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  padding: 5px 10px;
-  border-radius: 6px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.mini-tab.active {
-  background: var(--surface-2);
-  color: var(--text);
-}
-
-.bars-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.bar-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.bar-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.86rem;
-}
-
-.bar-label {
-  color: var(--muted);
-}
-
-.bar-value {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.bar-track {
-  width: 100%;
-  height: 10px;
-  border-radius: 999px;
+/* ==================== GRUPOS DE DÍVIDAS PARCELADAS ==================== */
+.group-card {
+  border-radius: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
   overflow: hidden;
 }
 
-.bar-fill {
-  height: 100%;
+.group-card.pendente {
+  border-left: 3px solid var(--amber);
+}
+
+.group-card.pago {
+  border-left: 3px solid var(--green);
+}
+
+.group-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 16px;
+  flex-wrap: wrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.group-summary:hover {
+  background: #0e1629;
+}
+
+.parcel-pill {
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 2px 8px;
   border-radius: 999px;
-  transition: width 0.35s ease;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.group-totals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-right: 4px;
+}
+
+.group-total-sub {
+  font-size: 0.73rem;
+  color: var(--muted);
+}
+
+.btn-expand {
+  background: rgba(59, 130, 246, 0.14);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  padding: 6px 11px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-expand:hover {
+  background: rgba(59, 130, 246, 0.24);
+}
+
+.group-parcelas {
+  border-top: 1px solid var(--border);
+  background: rgba(17, 24, 39, 0.7);
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.parcela-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.parcela-row.pago {
+  opacity: 0.72;
+}
+
+.parcela-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.88rem;
+}
+
+.parcela-date {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.parcela-value {
+  font-weight: 700;
+  font-size: 0.92rem;
+  margin-right: 4px;
 }
 
 /* ==================== LISTA DE LANÇAMENTOS ==================== */

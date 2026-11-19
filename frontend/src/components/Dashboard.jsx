@@ -52,6 +52,77 @@ function moverMes(mesIso, delta) {
   return `${novoAno}-${String(novoMes).padStart(2, '0')}`;
 }
 
+function nomeBaseParcela(titulo) {
+  return titulo.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+}
+
+/**
+ * Agrupa lançamentos que pertencem ao mesmo "grupo_parcela" em um único item
+ * expansível (acordeão), evitando que uma dívida de 48x polua a lista inicial.
+ */
+function agruparLancamentos(lista) {
+  const mapaGrupos = new Map();
+  const resultado = [];
+
+  for (const item of lista) {
+    if (!item.grupo_parcela) {
+      resultado.push({ tipoItem: 'unico', item, dataOrdem: item.data });
+      continue;
+    }
+
+    if (!mapaGrupos.has(item.grupo_parcela)) {
+      const grupo = {
+        tipoItem: 'grupo',
+        grupoId: item.grupo_parcela,
+        nomeBase: nomeBaseParcela(item.titulo),
+        tipo: item.tipo,
+        categoria: item.categoria,
+        parcelas: [],
+      };
+      mapaGrupos.set(item.grupo_parcela, grupo);
+      resultado.push(grupo);
+    }
+
+    mapaGrupos.get(item.grupo_parcela).parcelas.push(item);
+  }
+
+  return resultado.map((entrada) => {
+    if (entrada.tipoItem === 'unico') return entrada;
+
+    // Se só existe 1 parcela visível (ex.: filtro "Por Mês"), mostra direto como linha simples
+    if (entrada.parcelas.length === 1) {
+      return {
+        tipoItem: 'unico',
+        item: entrada.parcelas[0],
+        dataOrdem: entrada.parcelas[0].data,
+      };
+    }
+
+    // Ordena as parcelas dentro do grupo em ordem cronológica (1/48, 2/48, ...)
+    const ordenadas = [...entrada.parcelas].sort((a, b) =>
+      a.data.localeCompare(b.data)
+    );
+    const pagas = ordenadas.filter((p) => p.status === 'pago');
+    const pendentes = ordenadas.filter((p) => p.status === 'pendente');
+    const valorRestante = pendentes.reduce((acc, p) => acc + p.valor, 0);
+    const valorTotal = ordenadas.reduce((acc, p) => acc + p.valor, 0);
+    const proximaParcela = pendentes[0] || ordenadas[ordenadas.length - 1];
+
+    return {
+      ...entrada,
+      parcelas: ordenadas,
+      qtdTotal: ordenadas.length,
+      qtdPagas: pagas.length,
+      qtdPendentes: pendentes.length,
+      valorRestante,
+      valorTotal,
+      valorMensal: proximaParcela?.valor || 0,
+      proximaData: proximaParcela?.data || ordenadas[0].data,
+      todosPagos: pendentes.length === 0,
+    };
+  });
+}
+
 export default function Dashboard({ usuario, onSair }) {
   // Vazio ('') = padrão "Tudo (Total Geral)". Quando preenchido ('YYYY-MM'), filtra aquele mês.
   const [mes, setMes] = useState('');
@@ -67,7 +138,9 @@ export default function Dashboard({ usuario, onSair }) {
   });
   const [filtro, setFiltro] = useState('todos');
   const [busca, setBusca] = useState('');
+  const [gruposAbertos, setGruposAbertos] = useState({});
   const [modalAberto, setModalAberto] = useState(false);
+  const [itemEditando, setItemEditando] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
 
@@ -89,7 +162,22 @@ export default function Dashboard({ usuario, onSair }) {
     carregarDados(mes);
   }, [mes]);
 
-  async function handleLancamentoCriado(dataDoLancamento) {
+  function abrirNovo() {
+    setItemEditando(null);
+    setModalAberto(true);
+  }
+
+  function abrirEdicao(item) {
+    setItemEditando(item);
+    setModalAberto(true);
+  }
+
+  function fecharModal() {
+    setModalAberto(false);
+    setItemEditando(null);
+  }
+
+  async function handleSalvo(dataDoLancamento) {
     const mesDoLancamento = dataDoLancamento.slice(0, 7);
     if (mes && mesDoLancamento !== mes) {
       setMes(mesDoLancamento);
@@ -108,27 +196,42 @@ export default function Dashboard({ usuario, onSair }) {
     }
   }
 
-  async function handleExcluir(id) {
+  async function handleExcluirUnico(item) {
+    const ok = window.confirm(
+      `Excluir apenas "${item.titulo}" (${formatarMoeda(item.valor)} em ${formatarData(item.data)})?`
+    );
+    if (!ok) return;
+
     try {
-      await api.excluirLancamento(id);
+      await api.excluirLancamento(item.id);
       await carregarDados(mes);
     } catch (err) {
       setErro(err.message);
     }
   }
 
+  async function handleExcluirGrupo(grupo) {
+    const ok = window.confirm(
+      `Excluir TODAS as ${grupo.qtdTotal} parcelas de "${grupo.nomeBase}" (Total: ${formatarMoeda(grupo.valorTotal)})?`
+    );
+    if (!ok) return;
+
+    try {
+      await api.excluirGrupoParcelas(grupo.grupoId);
+      await carregarDados(mes);
+    } catch (err) {
+      setErro(err.message);
+    }
+  }
+
+  function alternarGrupo(grupoId) {
+    setGruposAbertos((prev) => ({ ...prev, [grupoId]: !prev[grupoId] }));
+  }
+
   const modoGeral = !mes;
   const termoBusca = busca.trim().toLowerCase();
 
-  // Contadores para os botões de filtro
-  const contadores = {
-    todos: lancamentos.length,
-    entrada: lancamentos.filter((i) => i.tipo === 'entrada').length,
-    saida: lancamentos.filter((i) => i.tipo === 'saida').length,
-    divida: lancamentos.filter((i) => i.tipo === 'divida').length,
-    pendente: lancamentos.filter((i) => i.status === 'pendente').length,
-  };
-
+  // Aplica filtros e busca nos lançamentos
   const lancamentosFiltrados = lancamentos.filter((item) => {
     const passaTipo =
       filtro === 'todos'
@@ -145,9 +248,30 @@ export default function Dashboard({ usuario, onSair }) {
     return passaTipo && passaBusca;
   });
 
+  // Agrupa dívidas parceladas em 1 card expansível por dívida
+  const itensExibidos = agruparLancamentos(lancamentosFiltrados);
+
+  // Contadores limpos (contando cada dívida parcelada como 1 grupo no modo geral)
+  const todosAgrupados = agruparLancamentos(lancamentos);
+  const contadores = {
+    todos: todosAgrupados.length,
+    entrada: todosAgrupados.filter((e) =>
+      e.tipoItem === 'unico' ? e.item.tipo === 'entrada' : e.tipo === 'entrada'
+    ).length,
+    saida: todosAgrupados.filter((e) =>
+      e.tipoItem === 'unico' ? e.item.tipo === 'saida' : e.tipo === 'saida'
+    ).length,
+    divida: todosAgrupados.filter((e) =>
+      e.tipoItem === 'unico' ? e.item.tipo === 'divida' : e.tipo === 'divida'
+    ).length,
+    pendente: todosAgrupados.filter((e) =>
+      e.tipoItem === 'unico' ? e.item.status === 'pendente' : e.qtdPendentes > 0
+    ).length,
+  };
+
   return (
     <div className="dashboard">
-      {/* Barra superior limpa com o botão de Novo Lançamento */}
+      {/* Barra superior limpa */}
       <header className="topbar">
         <div className="topbar-left">
           <div className="logo-badge small">R$</div>
@@ -158,11 +282,7 @@ export default function Dashboard({ usuario, onSair }) {
         </div>
 
         <div className="topbar-actions">
-          <button
-            type="button"
-            className="btn-add"
-            onClick={() => setModalAberto(true)}
-          >
+          <button type="button" className="btn-add" onClick={abrirNovo}>
             + Novo lançamento
           </button>
           <button type="button" className="btn-outline" onClick={onSair}>
@@ -279,10 +399,10 @@ export default function Dashboard({ usuario, onSair }) {
           </div>
         </section>
 
-        {/* Gráficos (Rosca + Comparativo em Barras) */}
-        <Charts resumo={resumo} lancamentos={lancamentos} modoGeral={modoGeral} />
+        {/* Gráfico único e limpo: Verde (o que tenho) x Amarelo (vai sair) x Vermelho (já saiu) */}
+        <Charts resumo={resumo} modoGeral={modoGeral} />
 
-        {/* Lista completa de lançamentos (agora ocupando 100% da largura!) */}
+        {/* Lista de lançamentos com dívidas parceladas agrupadas */}
         <section className="panel entries-panel">
           <div className="entries-header">
             <div>
@@ -292,8 +412,8 @@ export default function Dashboard({ usuario, onSair }) {
                   : `Lançamentos — ${formatarMesBonito(mes)}`}
               </h2>
               <span className="chart-subtitle">
-                {lancamentosFiltrados.length}{' '}
-                {lancamentosFiltrados.length === 1 ? 'registro exibido' : 'registros exibidos'}
+                {itensExibidos.length}{' '}
+                {itensExibidos.length === 1 ? 'item exibido' : 'itens exibidos'}
               </span>
             </div>
 
@@ -329,7 +449,7 @@ export default function Dashboard({ usuario, onSair }) {
 
           {carregando ? (
             <p className="empty-state">Carregando lançamentos...</p>
-          ) : lancamentosFiltrados.length === 0 ? (
+          ) : itensExibidos.length === 0 ? (
             <div className="empty-box">
               <p className="empty-state">
                 {termoBusca
@@ -337,93 +457,234 @@ export default function Dashboard({ usuario, onSair }) {
                   : 'Nenhum lançamento neste período ainda.'}
               </p>
               {!termoBusca && (
-                <button
-                  type="button"
-                  className="btn-add"
-                  onClick={() => setModalAberto(true)}
-                >
+                <button type="button" className="btn-add" onClick={abrirNovo}>
                   + Adicionar primeiro lançamento
                 </button>
               )}
             </div>
           ) : (
             <ul className="entry-list">
-              {lancamentosFiltrados.map((item) => (
-                <li key={item.id} className={`entry-item ${item.status}`}>
-                  <div className="entry-info">
-                    <div className="entry-title-row">
-                      <span className={`badge ${item.tipo}`}>
-                        {item.tipo === 'entrada'
-                          ? 'Entrada'
-                          : item.tipo === 'divida'
-                            ? 'Dívida'
-                            : 'Saída'}
-                      </span>
-                      <strong className="entry-title">{item.titulo}</strong>
+              {itensExibidos.map((entrada) => {
+                // Caso 1: Lançamento individual (Entrada, Saída, Dívida 1x ou parcela única do mês)
+                if (entrada.tipoItem === 'unico') {
+                  const { item } = entrada;
+                  return (
+                    <li key={item.id} className={`entry-item ${item.status}`}>
+                      <div className="entry-info">
+                        <div className="entry-title-row">
+                          <span className={`badge ${item.tipo}`}>
+                            {item.tipo === 'entrada'
+                              ? 'Entrada'
+                              : item.tipo === 'divida'
+                                ? 'Dívida'
+                                : 'Saída'}
+                          </span>
+                          <strong className="entry-title">{item.titulo}</strong>
+                        </div>
+
+                        <div className="entry-meta">
+                          <span>{item.categoria}</span>
+                          <span>•</span>
+                          <span>{formatarData(item.data)}</span>
+                          <span>•</span>
+                          <span className={`status-dot ${item.status}`}>
+                            {item.status === 'pago'
+                              ? item.tipo === 'entrada'
+                                ? 'Recebido'
+                                : 'Pago'
+                              : item.tipo === 'entrada'
+                                ? 'A receber'
+                                : 'Pendente (vai sair)'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="entry-actions">
+                        <span
+                          className={`entry-amount ${
+                            item.tipo === 'entrada' ? 'positive' : 'negative'
+                          }`}
+                        >
+                          {item.tipo === 'entrada' ? '+' : '-'}{' '}
+                          {formatarMoeda(item.valor)}
+                        </span>
+
+                        <button
+                          type="button"
+                          className={
+                            item.status === 'pendente' ? 'btn-pay' : 'btn-small'
+                          }
+                          onClick={() => alternarStatus(item)}
+                        >
+                          {item.status === 'pago'
+                            ? 'Voltar pendente'
+                            : item.tipo === 'entrada'
+                              ? 'Marcar recebido'
+                              : 'Marcar pago'}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-small"
+                          onClick={() => abrirEdicao(item)}
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-delete"
+                          onClick={() => handleExcluirUnico(item)}
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </li>
+                  );
+                }
+
+                // Caso 2: Grupo de Dívida Parcelada (1 único card expansível!)
+                const aberto = Boolean(gruposAbertos[entrada.grupoId]);
+                return (
+                  <li
+                    key={entrada.grupoId}
+                    className={`group-card ${entrada.todosPagos ? 'pago' : 'pendente'}`}
+                  >
+                    <div
+                      className="group-summary"
+                      onClick={() => alternarGrupo(entrada.grupoId)}
+                    >
+                      <div className="entry-info">
+                        <div className="entry-title-row">
+                          <span className="badge divida">Dívida parcelada</span>
+                          <strong className="entry-title">{entrada.nomeBase}</strong>
+                          <span className="parcel-pill">
+                            {entrada.qtdPagas}/{entrada.qtdTotal} pagas
+                          </span>
+                        </div>
+
+                        <div className="entry-meta">
+                          <span>{entrada.categoria}</span>
+                          <span>•</span>
+                          <span>{formatarMoeda(entrada.valorMensal)}/mês</span>
+                          <span>•</span>
+                          {entrada.todosPagos ? (
+                            <span className="status-dot pago">Todas pagas</span>
+                          ) : (
+                            <span className="status-dot pendente">
+                              Faltam {entrada.qtdPendentes} • Próx.:{' '}
+                              {formatarData(entrada.proximaData)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div
+                        className="entry-actions"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="group-totals">
+                          <span className="entry-amount negative">
+                            - {formatarMoeda(entrada.todosPagos ? entrada.valorTotal : entrada.valorRestante)}
+                          </span>
+                          <span className="group-total-sub">
+                            {entrada.todosPagos
+                              ? 'Quitada'
+                              : `Restante (Total: ${formatarMoeda(entrada.valorTotal)})`}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="btn-expand"
+                          onClick={() => alternarGrupo(entrada.grupoId)}
+                        >
+                          {aberto ? 'Ocultar ▴' : 'Ver parcelas ▾'}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-delete"
+                          onClick={() => handleExcluirGrupo(entrada)}
+                          title="Excluir todas as parcelas desta dívida"
+                        >
+                          Excluir todas
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="entry-meta">
-                      <span>{item.categoria}</span>
-                      <span>•</span>
-                      <span>{formatarData(item.data)}</span>
-                      <span>•</span>
-                      <span className={`status-dot ${item.status}`}>
-                        {item.status === 'pago'
-                          ? item.tipo === 'entrada'
-                            ? 'Recebido'
-                            : 'Pago'
-                          : item.tipo === 'entrada'
-                            ? 'A receber'
-                            : 'Pendente (vai sair)'}
-                      </span>
-                    </div>
-                  </div>
+                    {/* Lista interna das parcelas (só aparece quando você clica para abrir) */}
+                    {aberto && (
+                      <div className="group-parcelas">
+                        {entrada.parcelas.map((parcela) => (
+                          <div
+                            key={parcela.id}
+                            className={`parcela-row ${parcela.status}`}
+                          >
+                            <div className="parcela-left">
+                              <strong>{parcela.titulo}</strong>
+                              <span className="parcela-date">
+                                Vencimento: {formatarData(parcela.data)} •{' '}
+                                <span className={`status-dot ${parcela.status}`}>
+                                  {parcela.status === 'pago' ? 'Pago' : 'Pendente'}
+                                </span>
+                              </span>
+                            </div>
 
-                  <div className="entry-actions">
-                    <span
-                      className={`entry-amount ${
-                        item.tipo === 'entrada' ? 'positive' : 'negative'
-                      }`}
-                    >
-                      {item.tipo === 'entrada' ? '+' : '-'} {formatarMoeda(item.valor)}
-                    </span>
+                            <div className="entry-actions">
+                              <span className="parcela-value negative">
+                                - {formatarMoeda(parcela.valor)}
+                              </span>
 
-                    <button
-                      type="button"
-                      className={
-                        item.status === 'pendente' ? 'btn-pay' : 'btn-small'
-                      }
-                      onClick={() => alternarStatus(item)}
-                      title="Alternar entre Pago e Pendente"
-                    >
-                      {item.status === 'pago'
-                        ? 'Voltar pendente'
-                        : item.tipo === 'entrada'
-                          ? 'Marcar recebido'
-                          : 'Marcar pago'}
-                    </button>
+                              <button
+                                type="button"
+                                className={
+                                  parcela.status === 'pendente'
+                                    ? 'btn-pay'
+                                    : 'btn-small'
+                                }
+                                onClick={() => alternarStatus(parcela)}
+                              >
+                                {parcela.status === 'pago'
+                                  ? 'Voltar pendente'
+                                  : 'Marcar pago'}
+                              </button>
 
-                    <button
-                      type="button"
-                      className="btn-delete"
-                      onClick={() => handleExcluir(item.id)}
-                      title="Excluir lançamento"
-                    >
-                      Excluir
-                    </button>
-                  </div>
-                </li>
-              ))}
+                              <button
+                                type="button"
+                                className="btn-small"
+                                onClick={() => abrirEdicao(parcela)}
+                              >
+                                Editar
+                              </button>
+
+                              <button
+                                type="button"
+                                className="btn-delete"
+                                onClick={() => handleExcluirUnico(parcela)}
+                                title="Excluir apenas esta parcela"
+                              >
+                                Excluir
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
       </main>
 
-      {/* Modal aberto pelo botão "+ Novo lançamento" */}
+      {/* Modal único para Criar e Editar lançamentos */}
       <NovoLancamentoModal
         aberto={modalAberto}
-        onFechar={() => setModalAberto(false)}
-        onCriado={handleLancamentoCriado}
+        itemEditando={itemEditando}
+        onFechar={fecharModal}
+        onSalvo={handleSalvo}
       />
     </div>
   );

@@ -40,10 +40,17 @@ function somarMesesPreview(dataIso, mesesParaSomar) {
 }
 
 /**
- * Modal de Novo Lançamento (Entrada, Saída ou Dívida parcelada).
- * Abre somente quando o usuário clica no botão "+ Novo Lançamento", deixando a tela principal bem limpa.
+ * Modal reutilizável para CRIAR um novo lançamento (inclusive dívida parcelada)
+ * ou EDITAR qualquer lançamento existente.
  */
-export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
+export default function NovoLancamentoModal({
+  aberto,
+  itemEditando,
+  onFechar,
+  onSalvo,
+}) {
+  const modoEdicao = Boolean(itemEditando);
+
   const [tipo, setTipo] = useState('entrada');
   const [titulo, setTitulo] = useState('');
   const [valor, setValor] = useState('');
@@ -54,6 +61,31 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
   const [modoValorParcela, setModoValorParcela] = useState('parcela');
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
+
+  // Preenche o formulário quando abre em modo edição ou reseta para novo lançamento
+  useEffect(() => {
+    if (!aberto) return;
+    setErro('');
+
+    if (itemEditando) {
+      setTipo(itemEditando.tipo);
+      setTitulo(itemEditando.titulo);
+      setValor(String(itemEditando.valor));
+      setCategoria(itemEditando.categoria);
+      setData(itemEditando.data);
+      setStatus(itemEditando.status);
+      setParcelas(1);
+    } else {
+      setTipo('entrada');
+      setTitulo('');
+      setValor('');
+      setCategoria('Salário');
+      setData(hojeIso());
+      setStatus('pago');
+      setParcelas(1);
+      setModoValorParcela('parcela');
+    }
+  }, [aberto, itemEditando]);
 
   // Fecha o modal ao apertar ESC
   useEffect(() => {
@@ -69,12 +101,17 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
 
   function trocarTipo(novoTipo) {
     setTipo(novoTipo);
-    setCategoria(CATEGORIAS_POR_TIPO[novoTipo][0]);
-    if (novoTipo === 'divida') {
-      setStatus('pendente');
-    } else {
-      setStatus('pago');
-      setParcelas(1);
+    const listaCategorias = CATEGORIAS_POR_TIPO[novoTipo];
+    if (!listaCategorias.includes(categoria)) {
+      setCategoria(listaCategorias[0]);
+    }
+    if (!modoEdicao) {
+      if (novoTipo === 'divida') {
+        setStatus('pendente');
+      } else {
+        setStatus('pago');
+        setParcelas(1);
+      }
     }
   }
 
@@ -85,24 +122,33 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
 
     try {
       const valorNumerico = Number(String(valor).replace(',', '.'));
-      const qtdParcelas =
-        tipo === 'divida' ? Math.max(1, Math.min(60, Number(parcelas) || 1)) : 1;
 
-      await api.criarLancamento({
-        titulo,
-        valor: valorNumerico,
-        tipo,
-        categoria,
-        data,
-        status,
-        parcelas: qtdParcelas,
-        modoValorParcela,
-      });
+      if (modoEdicao) {
+        await api.atualizarLancamento(itemEditando.id, {
+          titulo,
+          valor: valorNumerico,
+          tipo,
+          categoria,
+          data,
+          status,
+        });
+      } else {
+        const qtdParcelas =
+          tipo === 'divida' ? Math.max(1, Math.min(60, Number(parcelas) || 1)) : 1;
 
-      setTitulo('');
-      setValor('');
-      setParcelas(1);
-      await onCriado(data);
+        await api.criarLancamento({
+          titulo,
+          valor: valorNumerico,
+          tipo,
+          categoria,
+          data,
+          status,
+          parcelas: qtdParcelas,
+          modoValorParcela,
+        });
+      }
+
+      await onSalvo(data);
       onFechar();
     } catch (err) {
       setErro(err.message);
@@ -111,10 +157,18 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
     }
   }
 
+  const categoriasDisponiveis = CATEGORIAS_POR_TIPO[tipo].includes(categoria)
+    ? CATEGORIAS_POR_TIPO[tipo]
+    : [categoria, ...CATEGORIAS_POR_TIPO[tipo]];
+
   const qtdParcelasValida = Math.max(1, Math.min(60, Number(parcelas) || 1));
   const valorDigitadoNum = Number(String(valor).replace(',', '.'));
   const temPreviewParcelas =
-    tipo === 'divida' && qtdParcelasValida > 1 && valorDigitadoNum > 0 && data;
+    !modoEdicao &&
+    tipo === 'divida' &&
+    qtdParcelasValida > 1 &&
+    valorDigitadoNum > 0 &&
+    data;
 
   const valorCadaParcelaPreview =
     modoValorParcela === 'total'
@@ -132,9 +186,11 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div>
-            <h2>Novo lançamento</h2>
+            <h2>{modoEdicao ? 'Editar lançamento' : 'Novo lançamento'}</h2>
             <p className="modal-subtitle">
-              Registre uma entrada, saída ou dívida parcelada
+              {modoEdicao
+                ? 'Altere descrição, valor, data ou situação deste registro'
+                : 'Registre uma entrada, saída ou dívida parcelada'}
             </p>
           </div>
           <button
@@ -180,7 +236,7 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
                 tipo === 'entrada'
                   ? 'Ex.: Salário, Freelance...'
                   : tipo === 'divida'
-                    ? 'Ex.: Celular no Cartão, Empréstimo...'
+                    ? 'Ex.: Google AI Pro, Celular no Cartão...'
                     : 'Ex.: Mercado, Energia, Aluguel...'
               }
               value={titulo}
@@ -193,7 +249,7 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
           <div className="field-row">
             <label className="field">
               <span>
-                {tipo === 'divida' && qtdParcelasValida > 1
+                {!modoEdicao && tipo === 'divida' && qtdParcelasValida > 1
                   ? modoValorParcela === 'total'
                     ? 'Valor total (R$)'
                     : 'Valor da parcela (R$)'
@@ -213,7 +269,7 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
             <label className="field">
               <span>
                 {tipo === 'divida'
-                  ? qtdParcelasValida > 1
+                  ? !modoEdicao && qtdParcelasValida > 1
                     ? '1º Vencimento'
                     : 'Vencimento'
                   : 'Data'}
@@ -227,7 +283,7 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
             </label>
           </div>
 
-          {tipo === 'divida' && (
+          {!modoEdicao && tipo === 'divida' && (
             <div className="installment-box">
               <div className="installment-header">
                 <span>Quantas parcelas faltam?</span>
@@ -292,7 +348,7 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
                 value={categoria}
                 onChange={(e) => setCategoria(e.target.value)}
               >
-                {CATEGORIAS_POR_TIPO[tipo].map((cat) => (
+                {categoriasDisponiveis.map((cat) => (
                   <option key={cat} value={cat}>
                     {cat}
                   </option>
@@ -325,9 +381,11 @@ export default function NovoLancamentoModal({ aberto, onFechar, onCriado }) {
             <button type="submit" className="btn-primary" disabled={salvando}>
               {salvando
                 ? 'Salvando...'
-                : tipo === 'divida' && qtdParcelasValida > 1
-                  ? `Adicionar ${qtdParcelasValida} parcelas`
-                  : 'Salvar lançamento'}
+                : modoEdicao
+                  ? 'Salvar alterações'
+                  : tipo === 'divida' && qtdParcelasValida > 1
+                    ? `Adicionar ${qtdParcelasValida} parcelas`
+                    : 'Salvar lançamento'}
             </button>
           </div>
         </form>

@@ -73,10 +73,21 @@ export const api = {
       body: JSON.stringify(dados),
     }),
 
+  atualizarLancamento: (id, dados) =>
+    requisicao(`/lancamentos/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(dados),
+    }),
+
   atualizarStatus: (id, status) =>
     requisicao(`/lancamentos/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
+    }),
+
+  excluirGrupoParcelas: (grupoId) =>
+    requisicao(`/lancamentos/grupo/${encodeURIComponent(grupoId)}`, {
+      method: 'DELETE',
     }),
 
   excluirLancamento: (id) =>

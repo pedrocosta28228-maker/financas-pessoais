@@ -130,7 +130,7 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
   if (mes && /^\d{4}-\d{2}$/.test(mes)) {
     lancamentos = db
       .prepare(`
-        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, criado_em
+        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em
         FROM lancamentos
         WHERE usuario_id = ? AND substr(data, 1, 7) = ?
         ORDER BY data DESC, id DESC
@@ -139,7 +139,7 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
   } else {
     lancamentos = db
       .prepare(`
-        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, criado_em
+        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em
         FROM lancamentos
         WHERE usuario_id = ?
         ORDER BY data DESC, id DESC
@@ -326,13 +326,83 @@ app.patch('/api/lancamentos/:id/status', autenticar, (req, res) => {
   }
 
   const atualizado = db
-    .prepare('SELECT id, titulo, valor, tipo, categoria, data, status, observacao, criado_em FROM lancamentos WHERE id = ?')
+    .prepare('SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em FROM lancamentos WHERE id = ?')
     .get(id);
 
   return res.json({ lancamento: atualizado });
 });
 
-// 7. Excluir um lançamento
+// 7. Editar um lançamento existente (descrição, valor, data, tipo, categoria ou situação)
+app.put('/api/lancamentos/:id', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+  const { titulo, valor, tipo, categoria, data, status, observacao } = req.body;
+
+  const valorNumero = Number(valor);
+  const tiposValidos = ['entrada', 'saida', 'divida'];
+  const statusValidos = ['pago', 'pendente'];
+
+  if (!titulo?.trim()) {
+    return res.status(400).json({ erro: 'Informe uma descrição para o lançamento.' });
+  }
+  if (!Number.isFinite(valorNumero) || valorNumero <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
+  }
+  if (!tiposValidos.includes(tipo)) {
+    return res.status(400).json({ erro: 'Tipo inválido.' });
+  }
+  if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+    return res.status(400).json({ erro: 'Informe uma data válida (AAAA-MM-DD).' });
+  }
+
+  const statusFinal = statusValidos.includes(status) ? status : 'pago';
+  const categoriaFinal = categoria?.trim() || 'Geral';
+  const observacaoFinal = observacao?.trim() || '';
+
+  const resultado = db
+    .prepare(`
+      UPDATE lancamentos
+      SET titulo = ?, valor = ?, tipo = ?, categoria = ?, data = ?, status = ?, observacao = ?
+      WHERE id = ? AND usuario_id = ?
+    `)
+    .run(
+      titulo.trim(),
+      valorNumero,
+      tipo,
+      categoriaFinal,
+      data,
+      statusFinal,
+      observacaoFinal,
+      id,
+      req.usuario.id
+    );
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Lançamento não encontrado.' });
+  }
+
+  const atualizado = db
+    .prepare('SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em FROM lancamentos WHERE id = ?')
+    .get(id);
+
+  return res.json({ lancamento: atualizado });
+});
+
+// 8. Excluir todas as parcelas de um grupo de dívida de uma vez
+app.delete('/api/lancamentos/grupo/:grupoId', autenticar, (req, res) => {
+  const { grupoId } = req.params;
+
+  const resultado = db
+    .prepare('DELETE FROM lancamentos WHERE grupo_parcela = ? AND usuario_id = ?')
+    .run(grupoId, req.usuario.id);
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Grupo de parcelas não encontrado.' });
+  }
+
+  return res.json({ ok: true, removidos: resultado.changes });
+});
+
+// 9. Excluir um único lançamento (ou uma única parcela)
 app.delete('/api/lancamentos/:id', autenticar, (req, res) => {
   const id = Number(req.params.id);
 
