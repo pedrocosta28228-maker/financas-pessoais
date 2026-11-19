@@ -57,6 +57,7 @@ export default function NovoLancamentoModal({
   const [categoria, setCategoria] = useState('Salário');
   const [data, setData] = useState(hojeIso);
   const [status, setStatus] = useState('pago');
+  const [descontarSaldo, setDescontarSaldo] = useState(true);
   const [parcelas, setParcelas] = useState(1);
   const [modoValorParcela, setModoValorParcela] = useState('parcela');
   const [salvando, setSalvando] = useState(false);
@@ -74,6 +75,7 @@ export default function NovoLancamentoModal({
       setCategoria(itemEditando.categoria);
       setData(itemEditando.data);
       setStatus(itemEditando.status);
+      setDescontarSaldo(itemEditando.descontar_saldo !== 0);
       setParcelas(1);
     } else {
       setTipo('entrada');
@@ -82,6 +84,7 @@ export default function NovoLancamentoModal({
       setCategoria('Salário');
       setData(hojeIso());
       setStatus('pago');
+      setDescontarSaldo(true);
       setParcelas(1);
       setModoValorParcela('parcela');
     }
@@ -131,6 +134,7 @@ export default function NovoLancamentoModal({
           categoria,
           data,
           status,
+          descontarSaldo,
         });
       } else {
         const qtdParcelas =
@@ -371,6 +375,19 @@ export default function NovoLancamentoModal({
               </select>
             </label>
           </div>
+
+          {modoEdicao && tipo !== 'entrada' && status === 'pago' && (
+            <label className="field">
+              <span>Origem do pagamento</span>
+              <select
+                value={descontarSaldo ? 'saldo' : 'fora'}
+                onChange={(e) => setDescontarSaldo(e.target.value === 'saldo')}
+              >
+                <option value="saldo">Descontar do saldo que tenho hoje</option>
+                <option value="fora">Pago por fora (não descontar do saldo)</option>
+              </select>
+            </label>
+          )}
 
           {erro && <div className="alert-error">{erro}</div>}
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import Charts from './Charts.jsx';
 import NovoLancamentoModal from './NovoLancamentoModal.jsx';
+import ConfirmarPagamentoModal from './ConfirmarPagamentoModal.jsx';
 
 const NOMES_MESES = [
   'Janeiro',
@@ -141,6 +142,7 @@ export default function Dashboard({ usuario, onSair }) {
   const [gruposAbertos, setGruposAbertos] = useState({});
   const [modalAberto, setModalAberto] = useState(false);
   const [itemEditando, setItemEditando] = useState(null);
+  const [itemPagando, setItemPagando] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
 
@@ -187,6 +189,12 @@ export default function Dashboard({ usuario, onSair }) {
   }
 
   async function alternarStatus(item) {
+    // Ao pagar uma saída ou dívida pendente, abre o pop-up perguntando se sai do saldo atual
+    if (item.status === 'pendente' && item.tipo !== 'entrada') {
+      setItemPagando(item);
+      return;
+    }
+
     const novoStatus = item.status === 'pago' ? 'pendente' : 'pago';
     try {
       await api.atualizarStatus(item.id, novoStatus);
@@ -491,7 +499,9 @@ export default function Dashboard({ usuario, onSair }) {
                             {item.status === 'pago'
                               ? item.tipo === 'entrada'
                                 ? 'Recebido'
-                                : 'Pago'
+                                : item.descontar_saldo === 0
+                                  ? 'Pago (por fora)'
+                                  : 'Pago (do saldo)'
                               : item.tipo === 'entrada'
                                 ? 'A receber'
                                 : 'Pendente (vai sair)'}
@@ -517,7 +527,9 @@ export default function Dashboard({ usuario, onSair }) {
                           onClick={() => alternarStatus(item)}
                         >
                           {item.status === 'pago'
-                            ? 'Voltar pendente'
+                            ? item.tipo === 'entrada'
+                              ? 'Voltar pendente'
+                              : 'Desfazer pago'
                             : item.tipo === 'entrada'
                               ? 'Marcar recebido'
                               : 'Marcar pago'}
@@ -626,7 +638,11 @@ export default function Dashboard({ usuario, onSair }) {
                               <span className="parcela-date">
                                 Vencimento: {formatarData(parcela.data)} •{' '}
                                 <span className={`status-dot ${parcela.status}`}>
-                                  {parcela.status === 'pago' ? 'Pago' : 'Pendente'}
+                                  {parcela.status === 'pago'
+                                    ? parcela.descontar_saldo === 0
+                                      ? 'Pago (por fora)'
+                                      : 'Pago (do saldo)'
+                                    : 'Pendente'}
                                 </span>
                               </span>
                             </div>
@@ -646,7 +662,7 @@ export default function Dashboard({ usuario, onSair }) {
                                 onClick={() => alternarStatus(parcela)}
                               >
                                 {parcela.status === 'pago'
-                                  ? 'Voltar pendente'
+                                  ? 'Desfazer pago'
                                   : 'Marcar pago'}
                               </button>
 
@@ -685,6 +701,14 @@ export default function Dashboard({ usuario, onSair }) {
         itemEditando={itemEditando}
         onFechar={fecharModal}
         onSalvo={handleSalvo}
+      />
+
+      {/* Pop-up ao pagar/adiantar uma parcela ou conta */}
+      <ConfirmarPagamentoModal
+        item={itemPagando}
+        saldoAtual={resumo.saldoReal}
+        onFechar={() => setItemPagando(null)}
+        onConfirmado={() => carregarDados(mes)}
       />
     </div>
   );

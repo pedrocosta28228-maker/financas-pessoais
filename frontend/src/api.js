@@ -81,10 +81,10 @@ export const api = {
       body: JSON.stringify(dados),
     }),
 
-  atualizarStatus: (id, status) =>
+  atualizarStatus: (id, status, opcoes = {}) =>
     requisicao(`/lancamentos/${id}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, ...opcoes }),
     }),
 
   excluirGrupoParcelas: (grupoId) =>

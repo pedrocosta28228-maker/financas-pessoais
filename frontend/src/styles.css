@@ -1064,6 +1064,82 @@ body {
   flex: 1;
 }
 
+/* ==================== MODAL CONFIRMAR PAGAMENTO ==================== */
+.pay-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pay-choice {
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 13px 14px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.pay-choice:hover {
+  border-color: #475569;
+}
+
+.pay-choice.active {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.pay-choice-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.92rem;
+}
+
+.pay-choice-desc {
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.pay-choice-desc strong {
+  color: var(--text);
+}
+
+.pay-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+.pay-tag.descontar {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
+
+.pay-tag.fora {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.pay-tip {
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  padding: 9px 11px;
+  line-height: 1.4;
+}
+
 @media (max-width: 900px) {
   .charts-grid {
     grid-template-columns: 1fr;

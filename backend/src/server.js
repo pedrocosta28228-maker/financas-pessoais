@@ -130,7 +130,7 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
   if (mes && /^\d{4}-\d{2}$/.test(mes)) {
     lancamentos = db
       .prepare(`
-        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em
+        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em
         FROM lancamentos
         WHERE usuario_id = ? AND substr(data, 1, 7) = ?
         ORDER BY data DESC, id DESC
@@ -139,7 +139,7 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
   } else {
     lancamentos = db
       .prepare(`
-        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em
+        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em
         FROM lancamentos
         WHERE usuario_id = ?
         ORDER BY data DESC, id DESC
@@ -147,7 +147,7 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
       .all(req.usuario.id);
   }
 
-  // Calcula os totais do mês: o que entrou, o que saiu e o que ainda vai sair
+  // Calcula os totais: o que entrou, o que saiu (do saldo) e o que ainda vai sair
   const resumo = lancamentos.reduce(
     (acc, item) => {
       if (item.tipo === 'entrada') {
@@ -159,7 +159,11 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
       } else {
         // Tanto "saida" quanto "divida" contam como negativo
         if (item.status === 'pago') {
-          acc.saidasPagas += item.valor;
+          if (item.descontar_saldo !== 0) {
+            acc.saidasPagas += item.valor;
+          } else {
+            acc.saidasPagasPorFora += item.valor;
+          }
         } else {
           acc.saidasAPagar += item.valor;
         }
@@ -174,6 +178,7 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
       entradasRecebidas: 0,
       entradasPrevistas: 0,
       saidasPagas: 0,
+      saidasPagasPorFora: 0,
       saidasAPagar: 0,
       dividasPendentes: 0,
     }
@@ -240,7 +245,7 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const selectById = db.prepare(`
-    SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em
+    SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em
     FROM lancamentos WHERE id = ?
   `);
 
@@ -307,35 +312,55 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
   return res.status(201).json({ lancamento: criado });
 });
 
-// 6. Atualizar status (ex.: marcar uma dívida ou conta pendente como "pago")
+// 6. Atualizar status (marcar como pago/adiantado com opção de descontar do saldo, ou voltar para pendente)
 app.patch('/api/lancamentos/:id/status', autenticar, (req, res) => {
   const id = Number(req.params.id);
-  const { status } = req.body;
+  const { status, descontarSaldo, valor } = req.body;
 
   if (!['pago', 'pendente'].includes(status)) {
     return res.status(400).json({ erro: 'Status inválido. Use "pago" ou "pendente".' });
   }
 
+  // Ao voltar para pendente, restaura descontar_saldo = 1 como padrão
+  const descontarValorDb =
+    status === 'pendente' ? 1 : descontarSaldo === false ? 0 : 1;
+
+  const valorNumero = valor !== undefined && valor !== null ? Number(valor) : null;
+  if (valorNumero !== null && (!Number.isFinite(valorNumero) || valorNumero <= 0)) {
+    return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
+  }
+
   // O "AND usuario_id = ?" garante que você só altera lançamentos da SUA conta
-  const resultado = db
-    .prepare('UPDATE lancamentos SET status = ? WHERE id = ? AND usuario_id = ?')
-    .run(status, id, req.usuario.id);
+  const resultado =
+    valorNumero !== null
+      ? db
+          .prepare(
+            'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ? WHERE id = ? AND usuario_id = ?'
+          )
+          .run(status, descontarValorDb, valorNumero, id, req.usuario.id)
+      : db
+          .prepare(
+            'UPDATE lancamentos SET status = ?, descontar_saldo = ? WHERE id = ? AND usuario_id = ?'
+          )
+          .run(status, descontarValorDb, id, req.usuario.id);
 
   if (resultado.changes === 0) {
     return res.status(404).json({ erro: 'Lançamento não encontrado.' });
   }
 
   const atualizado = db
-    .prepare('SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em FROM lancamentos WHERE id = ?')
+    .prepare(
+      'SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em FROM lancamentos WHERE id = ?'
+    )
     .get(id);
 
   return res.json({ lancamento: atualizado });
 });
 
-// 7. Editar um lançamento existente (descrição, valor, data, tipo, categoria ou situação)
+// 7. Editar um lançamento existente (descrição, valor, data, tipo, categoria, situação ou origem do pagamento)
 app.put('/api/lancamentos/:id', autenticar, (req, res) => {
   const id = Number(req.params.id);
-  const { titulo, valor, tipo, categoria, data, status, observacao } = req.body;
+  const { titulo, valor, tipo, categoria, data, status, observacao, descontarSaldo } = req.body;
 
   const valorNumero = Number(valor);
   const tiposValidos = ['entrada', 'saida', 'divida'];
@@ -357,11 +382,17 @@ app.put('/api/lancamentos/:id', autenticar, (req, res) => {
   const statusFinal = statusValidos.includes(status) ? status : 'pago';
   const categoriaFinal = categoria?.trim() || 'Geral';
   const observacaoFinal = observacao?.trim() || '';
+  const descontarValorDb =
+    statusFinal === 'pendente' || tipo === 'entrada'
+      ? 1
+      : descontarSaldo === false
+        ? 0
+        : 1;
 
   const resultado = db
     .prepare(`
       UPDATE lancamentos
-      SET titulo = ?, valor = ?, tipo = ?, categoria = ?, data = ?, status = ?, observacao = ?
+      SET titulo = ?, valor = ?, tipo = ?, categoria = ?, data = ?, status = ?, observacao = ?, descontar_saldo = ?
       WHERE id = ? AND usuario_id = ?
     `)
     .run(
@@ -372,6 +403,7 @@ app.put('/api/lancamentos/:id', autenticar, (req, res) => {
       data,
       statusFinal,
       observacaoFinal,
+      descontarValorDb,
       id,
       req.usuario.id
     );
@@ -381,7 +413,9 @@ app.put('/api/lancamentos/:id', autenticar, (req, res) => {
   }
 
   const atualizado = db
-    .prepare('SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em FROM lancamentos WHERE id = ?')
+    .prepare(
+      'SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em FROM lancamentos WHERE id = ?'
+    )
     .get(id);
 
   return res.json({ lancamento: atualizado });
