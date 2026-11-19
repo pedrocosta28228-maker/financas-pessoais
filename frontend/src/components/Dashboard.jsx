@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import Charts from './Charts.jsx';
 import NovoLancamentoModal from './NovoLancamentoModal.jsx';
 import ConfirmarPagamentoModal from './ConfirmarPagamentoModal.jsx';
+import ConfirmarExclusaoModal from './ConfirmarExclusaoModal.jsx';
 
 const NOMES_MESES = [
   'Janeiro',
@@ -143,6 +144,7 @@ export default function Dashboard({ usuario, onSair }) {
   const [modalAberto, setModalAberto] = useState(false);
   const [itemEditando, setItemEditando] = useState(null);
   const [itemPagando, setItemPagando] = useState(null);
+  const [alvoExclusao, setAlvoExclusao] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
 
@@ -204,32 +206,21 @@ export default function Dashboard({ usuario, onSair }) {
     }
   }
 
-  async function handleExcluirUnico(item) {
-    const ok = window.confirm(
-      `Excluir apenas "${item.titulo}" (${formatarMoeda(item.valor)} em ${formatarData(item.data)})?`
-    );
-    if (!ok) return;
-
-    try {
-      await api.excluirLancamento(item.id);
-      await carregarDados(mes);
-    } catch (err) {
-      setErro(err.message);
-    }
+  function pedirExclusaoUnico(item) {
+    setAlvoExclusao({ modo: 'unico', item });
   }
 
-  async function handleExcluirGrupo(grupo) {
-    const ok = window.confirm(
-      `Excluir TODAS as ${grupo.qtdTotal} parcelas de "${grupo.nomeBase}" (Total: ${formatarMoeda(grupo.valorTotal)})?`
-    );
-    if (!ok) return;
+  function pedirExclusaoGrupo(grupo) {
+    setAlvoExclusao({ modo: 'grupo', grupo });
+  }
 
-    try {
-      await api.excluirGrupoParcelas(grupo.grupoId);
-      await carregarDados(mes);
-    } catch (err) {
-      setErro(err.message);
+  async function confirmarExclusao(alvo) {
+    if (alvo.modo === 'grupo') {
+      await api.excluirGrupoParcelas(alvo.grupo.grupoId);
+    } else {
+      await api.excluirLancamento(alvo.item.id);
     }
+    await carregarDados(mes);
   }
 
   function alternarGrupo(grupoId) {
@@ -533,7 +524,7 @@ export default function Dashboard({ usuario, onSair }) {
                         <button
                           type="button"
                           className="btn-delete"
-                          onClick={() => handleExcluirUnico(item)}
+                          onClick={() => pedirExclusaoUnico(item)}
                         >
                           Excluir
                         </button>
@@ -604,7 +595,7 @@ export default function Dashboard({ usuario, onSair }) {
                         <button
                           type="button"
                           className="btn-delete"
-                          onClick={() => handleExcluirGrupo(entrada)}
+                          onClick={() => pedirExclusaoGrupo(entrada)}
                           title="Excluir todas as parcelas desta dívida"
                         >
                           Excluir todas
@@ -664,7 +655,7 @@ export default function Dashboard({ usuario, onSair }) {
                               <button
                                 type="button"
                                 className="btn-delete"
-                                onClick={() => handleExcluirUnico(parcela)}
+                                onClick={() => pedirExclusaoUnico(parcela)}
                                 title="Excluir apenas esta parcela"
                               >
                                 Excluir
@@ -696,6 +687,13 @@ export default function Dashboard({ usuario, onSair }) {
         saldoAtual={resumo.saldoReal}
         onFechar={() => setItemPagando(null)}
         onConfirmado={() => carregarDados(mes)}
+      />
+
+      {/* Pop-up visual de confirmação ao excluir */}
+      <ConfirmarExclusaoModal
+        alvo={alvoExclusao}
+        onFechar={() => setAlvoExclusao(null)}
+        onConfirmar={confirmarExclusao}
       />
     </div>
   );
