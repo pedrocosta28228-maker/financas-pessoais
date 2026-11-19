@@ -96,4 +96,29 @@ export const api = {
     requisicao(`/lancamentos/${id}`, {
       method: 'DELETE',
     }),
+
+  listarContas: () => requisicao('/contas'),
+
+  criarConta: (dados) =>
+    requisicao('/contas', {
+      method: 'POST',
+      body: JSON.stringify(dados),
+    }),
+
+  atualizarConta: (id, dados) =>
+    requisicao(`/contas/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(dados),
+    }),
+
+  excluirConta: (id) =>
+    requisicao(`/contas/${id}`, {
+      method: 'DELETE',
+    }),
+
+  transferirEntreContas: (origemId, destinoId, valor) =>
+    requisicao('/contas/transferir', {
+      method: 'POST',
+      body: JSON.stringify({ origemId, destinoId, valor }),
+    }),
 };

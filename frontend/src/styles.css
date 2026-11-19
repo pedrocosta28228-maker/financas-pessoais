@@ -1464,6 +1464,298 @@ body {
   cursor: not-allowed;
 }
 
+/* ==================== RECOLHER LISTA + PILLS DE CARTEIRA/CARTÃO ==================== */
+.entries-title-area {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.btn-collapse {
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-collapse:hover {
+  color: var(--text);
+  border-color: var(--primary);
+}
+
+.origin-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(168, 85, 247, 0.16);
+  color: #d8b4fe;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.wallet-inline-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.wallet-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.wallet-dot.tiny {
+  width: 7px;
+  height: 7px;
+}
+
+/* ==================== SEÇÃO DE CARTEIRAS (ONDE ESTÁ MEU DINHEIRO) ==================== */
+.wallets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.wallets-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.wallets-header h2 {
+  margin-bottom: 4px;
+}
+
+.wallets-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-transfer {
+  background: rgba(34, 197, 94, 0.14);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.38);
+  padding: 8px 13px;
+  border-radius: 9px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-transfer:hover {
+  background: rgba(34, 197, 94, 0.24);
+}
+
+.btn-small-primary {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 9px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-small-primary:hover {
+  background: var(--primary-hover);
+}
+
+.wallets-empty {
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.wallets-empty strong {
+  color: var(--text);
+}
+
+.wallets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 14px;
+}
+
+.wallet-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wallet-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wallet-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.94rem;
+}
+
+.wallet-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.wallet-balance {
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.wallet-footer {
+  display: flex;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.btn-link {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.btn-link:hover {
+  color: var(--text);
+}
+
+.btn-link.danger:hover {
+  color: #fca5a5;
+}
+
+.unassigned-note {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  color: #bfdbfe;
+  line-height: 1.45;
+}
+
+.color-picker {
+  display: flex;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.color-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.color-dot.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--primary);
+}
+
+/* ==================== RESUMO POR CARTÃO / PESSOA (ABA DÍVIDAS) ==================== */
+.origins-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.origins-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.origins-header h2 {
+  margin-bottom: 4px;
+}
+
+.origins-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.origin-card {
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 15px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.origin-card:hover {
+  border-color: #475569;
+}
+
+.origin-card.active {
+  border-color: #a855f7;
+  background: rgba(168, 85, 247, 0.12);
+}
+
+.origin-card-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.origin-card-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.origin-card-sub {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
 @media (max-width: 900px) {
   .charts-grid {
     grid-template-columns: 1fr;

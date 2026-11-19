@@ -38,6 +38,7 @@ export function agruparLancamentos(lista) {
         nomeBase: nomeBaseParcela(item.titulo),
         tipo: item.tipo,
         categoria: item.categoria,
+        origemDivida: item.origem_divida || '',
         parcelas: [],
       };
       mapaGrupos.set(item.grupo_parcela, grupo);
@@ -90,6 +91,8 @@ export default function ListaLancamentos({
   lancamentos,
   carregando,
   mostrarFiltrosTipo = true,
+  recolhivel = false,
+  chaveRecolher = '',
   textoBotaoVazio = '+ Adicionar lançamento',
   onAdicionar,
   onAlternarStatus,
@@ -100,6 +103,20 @@ export default function ListaLancamentos({
   const [filtro, setFiltro] = useState('todos');
   const [busca, setBusca] = useState('');
   const [gruposAbertos, setGruposAbertos] = useState({});
+  const [recolhido, setRecolhido] = useState(() => {
+    if (!recolhivel || !chaveRecolher) return false;
+    return localStorage.getItem(chaveRecolher) === 'true';
+  });
+
+  function alternarRecolhido() {
+    setRecolhido((atual) => {
+      const proximo = !atual;
+      if (chaveRecolher) {
+        localStorage.setItem(chaveRecolher, String(proximo));
+      }
+      return proximo;
+    });
+  }
 
   function alternarGrupo(grupoId) {
     setGruposAbertos((prev) => ({ ...prev, [grupoId]: !prev[grupoId] }));
@@ -120,7 +137,9 @@ export default function ListaLancamentos({
     const passaBusca =
       !termoBusca ||
       item.titulo.toLowerCase().includes(termoBusca) ||
-      item.categoria.toLowerCase().includes(termoBusca);
+      item.categoria.toLowerCase().includes(termoBusca) ||
+      (item.origem_divida || '').toLowerCase().includes(termoBusca) ||
+      (item.conta_nome || '').toLowerCase().includes(termoBusca);
 
     return passaFiltro && passaBusca;
   });
@@ -181,39 +200,54 @@ export default function ListaLancamentos({
   return (
     <section className="panel entries-panel">
       <div className="entries-header">
-        <div>
-          <h2>{titulo}</h2>
-          <span className="chart-subtitle">
-            {itensExibidos.length}{' '}
-            {itensExibidos.length === 1 ? 'item exibido' : 'itens exibidos'}
-          </span>
-        </div>
-
-        <div className="entries-toolbar">
-          <input
-            type="search"
-            className="search-input"
-            placeholder="Buscar descrição ou categoria..."
-            value={busca}
-            onChange={(e) => setBusca(e.target.value)}
-          />
-
-          <div className="filter-pills">
-            {opcoesFiltro.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                className={filtro === f.id ? 'pill active' : 'pill'}
-                onClick={() => setFiltro(f.id)}
-              >
-                {f.label} <span className="pill-count">{f.count}</span>
-              </button>
-            ))}
+        <div className="entries-title-area">
+          <div>
+            <h2>{titulo}</h2>
+            <span className="chart-subtitle">
+              {recolhido
+                ? `${todosAgrupados.length} ${todosAgrupados.length === 1 ? 'item oculto' : 'itens ocultos'}`
+                : `${itensExibidos.length} ${itensExibidos.length === 1 ? 'item exibido' : 'itens exibidos'}`}
+            </span>
           </div>
+
+          {recolhivel && (
+            <button
+              type="button"
+              className="btn-collapse"
+              onClick={alternarRecolhido}
+            >
+              {recolhido ? 'Expandir ▾' : 'Recolher ▴'}
+            </button>
+          )}
         </div>
+
+        {!recolhido && (
+          <div className="entries-toolbar">
+            <input
+              type="search"
+              className="search-input"
+              placeholder="Buscar descrição, cartão ou carteira..."
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+            />
+
+            <div className="filter-pills">
+              {opcoesFiltro.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className={filtro === f.id ? 'pill active' : 'pill'}
+                  onClick={() => setFiltro(f.id)}
+                >
+                  {f.label} <span className="pill-count">{f.count}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      {carregando ? (
+      {recolhido ? null : carregando ? (
         <p className="empty-state">Carregando lançamentos...</p>
       ) : itensExibidos.length === 0 ? (
         <div className="empty-box">
@@ -245,6 +279,18 @@ export default function ListaLancamentos({
                             : 'Saída'}
                       </span>
                       <strong className="entry-title">{item.titulo}</strong>
+                      {item.origem_divida && (
+                        <span className="origin-pill">{item.origem_divida}</span>
+                      )}
+                      {item.conta_nome && (
+                        <span className="wallet-inline-pill">
+                          <span
+                            className="wallet-dot tiny"
+                            style={{ backgroundColor: item.conta_cor || '#3b82f6' }}
+                          />
+                          {item.conta_nome}
+                        </span>
+                      )}
                     </div>
 
                     <div className="entry-meta">
@@ -327,6 +373,9 @@ export default function ListaLancamentos({
                       <span className="parcel-pill">
                         {entrada.qtdPagas}/{entrada.qtdTotal} pagas
                       </span>
+                      {entrada.origemDivida && (
+                        <span className="origin-pill">{entrada.origemDivida}</span>
+                      )}
                     </div>
 
                     <div className="entry-meta">

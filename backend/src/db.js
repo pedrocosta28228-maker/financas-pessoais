@@ -24,7 +24,19 @@ db.exec(`
     criado_em TEXT DEFAULT (datetime('now', 'localtime'))
   );
 
-  -- Tabela 2: Lançamentos financeiros (Entradas, Saídas e Dívidas)
+  -- Tabela 2: Carteiras / Contas (onde o dinheiro está guardado)
+  CREATE TABLE IF NOT EXISTS contas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id INTEGER NOT NULL,
+    nome TEXT NOT NULL,
+    etiqueta TEXT NOT NULL DEFAULT '',
+    cor TEXT NOT NULL DEFAULT '#3b82f6',
+    saldo_ajuste REAL NOT NULL DEFAULT 0,
+    criado_em TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+  );
+
+  -- Tabela 3: Lançamentos financeiros (Entradas, Saídas e Dívidas)
   CREATE TABLE IF NOT EXISTS lancamentos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id INTEGER NOT NULL,
@@ -37,8 +49,11 @@ db.exec(`
     observacao TEXT DEFAULT '',
     grupo_parcela TEXT DEFAULT NULL,
     descontar_saldo INTEGER NOT NULL DEFAULT 1,
+    conta_id INTEGER DEFAULT NULL,
+    origem_divida TEXT NOT NULL DEFAULT '',
     criado_em TEXT DEFAULT (datetime('now', 'localtime')),
-    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+    FOREIGN KEY (conta_id) REFERENCES contas(id) ON DELETE SET NULL
   );
 `);
 
@@ -49,6 +64,12 @@ if (!colunasLancamentos.some((c) => c.name === 'grupo_parcela')) {
 }
 if (!colunasLancamentos.some((c) => c.name === 'descontar_saldo')) {
   db.exec('ALTER TABLE lancamentos ADD COLUMN descontar_saldo INTEGER NOT NULL DEFAULT 1;');
+}
+if (!colunasLancamentos.some((c) => c.name === 'conta_id')) {
+  db.exec('ALTER TABLE lancamentos ADD COLUMN conta_id INTEGER DEFAULT NULL;');
+}
+if (!colunasLancamentos.some((c) => c.name === 'origem_divida')) {
+  db.exec("ALTER TABLE lancamentos ADD COLUMN origem_divida TEXT NOT NULL DEFAULT '';");
 }
 
 console.log(`Banco de dados SQLite pronto em: ${dbPath}`);

@@ -121,7 +121,35 @@ app.get('/api/auth/me', autenticar, (req, res) => {
 // ROTAS DE FINANÇAS (Todas protegidas — só funcionam com Login!)
 // ============================================================================
 
-// 4. Listar lançamentos de um mês (ex.: /api/lancamentos?mes=2026-11) e calcular resumo
+/**
+ * Garante que a conta informada existe e pertence ao usuário logado (evita IDOR).
+ */
+function resolverContaId(contaIdBruto, usuarioId) {
+  if (contaIdBruto === undefined || contaIdBruto === null || contaIdBruto === '') {
+    return null;
+  }
+  const id = Number(contaIdBruto);
+  if (!Number.isInteger(id) || id <= 0) return null;
+
+  const conta = db
+    .prepare('SELECT id FROM contas WHERE id = ? AND usuario_id = ?')
+    .get(id, usuarioId);
+
+  return conta ? conta.id : null;
+}
+
+const SELECT_LANCAMENTO_BASE = `
+  SELECT
+    l.id, l.titulo, l.valor, l.tipo, l.categoria, l.data, l.status,
+    l.observacao, l.grupo_parcela, l.descontar_saldo, l.conta_id,
+    l.origem_divida, l.criado_em,
+    c.nome AS conta_nome,
+    c.cor AS conta_cor
+  FROM lancamentos l
+  LEFT JOIN contas c ON c.id = l.conta_id AND c.usuario_id = l.usuario_id
+`;
+
+// 4. Listar lançamentos (todos ou de um mês específico) e calcular resumo
 app.get('/api/lancamentos', autenticar, (req, res) => {
   const { mes } = req.query; // Formato esperado: YYYY-MM
 
@@ -130,19 +158,17 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
   if (mes && /^\d{4}-\d{2}$/.test(mes)) {
     lancamentos = db
       .prepare(`
-        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em
-        FROM lancamentos
-        WHERE usuario_id = ? AND substr(data, 1, 7) = ?
-        ORDER BY data DESC, id DESC
+        ${SELECT_LANCAMENTO_BASE}
+        WHERE l.usuario_id = ? AND substr(l.data, 1, 7) = ?
+        ORDER BY l.data DESC, l.id DESC
       `)
       .all(req.usuario.id, mes);
   } else {
     lancamentos = db
       .prepare(`
-        SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em
-        FROM lancamentos
-        WHERE usuario_id = ?
-        ORDER BY data DESC, id DESC
+        ${SELECT_LANCAMENTO_BASE}
+        WHERE l.usuario_id = ?
+        ORDER BY l.data DESC, l.id DESC
       `)
       .all(req.usuario.id);
   }
@@ -202,7 +228,7 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
   });
 });
 
-// 5. Criar novo lançamento (entrada, saída ou dívida — com suporte a parcelamento!)
+// 5. Criar novo lançamento (entrada, saída ou dívida — com suporte a parcelamento, carteira e origem da dívida!)
 app.post('/api/lancamentos', autenticar, (req, res) => {
   const {
     titulo,
@@ -214,6 +240,8 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
     observacao,
     parcelas,
     modoValorParcela,
+    contaId,
+    origemDivida,
   } = req.body;
 
   const valorNumero = Number(valor);
@@ -239,15 +267,17 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
   const statusFinal = statusValidos.includes(status) ? status : 'pago';
   const categoriaFinal = categoria?.trim() || 'Geral';
   const observacaoFinal = observacao?.trim() || '';
+  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
+  const origemDividaFinal = tipo === 'divida' ? (origemDivida?.trim() || '') : '';
 
   const insertStmt = db.prepare(`
-    INSERT INTO lancamentos (usuario_id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO lancamentos (
+      usuario_id, titulo, valor, tipo, categoria, data, status,
+      observacao, grupo_parcela, conta_id, origem_divida
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const selectById = db.prepare(`
-    SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em
-    FROM lancamentos WHERE id = ?
-  `);
+  const selectById = db.prepare(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`);
 
   // Se for dívida parcelada (2x ou mais), grava todas as parcelas juntas numa Transação SQL
   if (totalParcelas > 1) {
@@ -267,7 +297,6 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
       for (let i = 0; i < totalParcelas; i++) {
         const dataParcela = somarMesesSeguro(data, i);
         const tituloParcela = `${titulo.trim()} (${i + 1}/${totalParcelas})`;
-        // Se dividiu um valor com dízima (ex.: R$ 100 / 3), ajusta os centavos na última parcela
         const valorParcela =
           i === totalParcelas - 1
             ? Math.round((valorBase + diferencaCentavos) * 100) / 100
@@ -282,7 +311,9 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
           dataParcela,
           statusFinal,
           observacaoFinal,
-          grupoId
+          grupoId,
+          contaIdFinal,
+          origemDividaFinal
         );
 
         criados.push(selectById.get(Number(resultado.lastInsertRowid)));
@@ -305,23 +336,24 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
     data,
     statusFinal,
     observacaoFinal,
-    null
+    null,
+    contaIdFinal,
+    origemDividaFinal
   );
 
   const criado = selectById.get(Number(resultado.lastInsertRowid));
   return res.status(201).json({ lancamento: criado });
 });
 
-// 6. Atualizar status (marcar como pago/adiantado com opção de descontar do saldo, ou voltar para pendente)
+// 6. Atualizar status (marcar como pago/adiantado com opção de descontar do saldo e carteira, ou voltar para pendente)
 app.patch('/api/lancamentos/:id/status', autenticar, (req, res) => {
   const id = Number(req.params.id);
-  const { status, descontarSaldo, valor } = req.body;
+  const { status, descontarSaldo, valor, contaId } = req.body;
 
   if (!['pago', 'pendente'].includes(status)) {
     return res.status(400).json({ erro: 'Status inválido. Use "pago" ou "pendente".' });
   }
 
-  // Ao voltar para pendente, restaura descontar_saldo = 1 como padrão
   const descontarValorDb =
     status === 'pendente' ? 1 : descontarSaldo === false ? 0 : 1;
 
@@ -330,37 +362,64 @@ app.patch('/api/lancamentos/:id/status', autenticar, (req, res) => {
     return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
   }
 
+  const temContaNoBody = contaId !== undefined;
+  const contaIdFinal =
+    status === 'pendente' || descontarValorDb === 0
+      ? null
+      : resolverContaId(contaId, req.usuario.id);
+
   // O "AND usuario_id = ?" garante que você só altera lançamentos da SUA conta
-  const resultado =
-    valorNumero !== null
-      ? db
-          .prepare(
-            'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ? WHERE id = ? AND usuario_id = ?'
-          )
-          .run(status, descontarValorDb, valorNumero, id, req.usuario.id)
-      : db
-          .prepare(
-            'UPDATE lancamentos SET status = ?, descontar_saldo = ? WHERE id = ? AND usuario_id = ?'
-          )
-          .run(status, descontarValorDb, id, req.usuario.id);
+  let resultado;
+  if (valorNumero !== null && (temContaNoBody || status === 'pendente')) {
+    resultado = db
+      .prepare(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ?, conta_id = ? WHERE id = ? AND usuario_id = ?'
+      )
+      .run(status, descontarValorDb, valorNumero, contaIdFinal, id, req.usuario.id);
+  } else if (valorNumero !== null) {
+    resultado = db
+      .prepare(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ? WHERE id = ? AND usuario_id = ?'
+      )
+      .run(status, descontarValorDb, valorNumero, id, req.usuario.id);
+  } else if (temContaNoBody || status === 'pendente') {
+    resultado = db
+      .prepare(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, conta_id = ? WHERE id = ? AND usuario_id = ?'
+      )
+      .run(status, descontarValorDb, contaIdFinal, id, req.usuario.id);
+  } else {
+    resultado = db
+      .prepare(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ? WHERE id = ? AND usuario_id = ?'
+      )
+      .run(status, descontarValorDb, id, req.usuario.id);
+  }
 
   if (resultado.changes === 0) {
     return res.status(404).json({ erro: 'Lançamento não encontrado.' });
   }
 
-  const atualizado = db
-    .prepare(
-      'SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em FROM lancamentos WHERE id = ?'
-    )
-    .get(id);
+  const atualizado = db.prepare(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`).get(id);
 
   return res.json({ lancamento: atualizado });
 });
 
-// 7. Editar um lançamento existente (descrição, valor, data, tipo, categoria, situação ou origem do pagamento)
+// 7. Editar um lançamento existente
 app.put('/api/lancamentos/:id', autenticar, (req, res) => {
   const id = Number(req.params.id);
-  const { titulo, valor, tipo, categoria, data, status, observacao, descontarSaldo } = req.body;
+  const {
+    titulo,
+    valor,
+    tipo,
+    categoria,
+    data,
+    status,
+    observacao,
+    descontarSaldo,
+    contaId,
+    origemDivida,
+  } = req.body;
 
   const valorNumero = Number(valor);
   const tiposValidos = ['entrada', 'saida', 'divida'];
@@ -388,11 +447,14 @@ app.put('/api/lancamentos/:id', autenticar, (req, res) => {
       : descontarSaldo === false
         ? 0
         : 1;
+  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
+  const origemDividaFinal = tipo === 'divida' ? (origemDivida?.trim() || '') : '';
 
   const resultado = db
     .prepare(`
       UPDATE lancamentos
-      SET titulo = ?, valor = ?, tipo = ?, categoria = ?, data = ?, status = ?, observacao = ?, descontar_saldo = ?
+      SET titulo = ?, valor = ?, tipo = ?, categoria = ?, data = ?, status = ?,
+          observacao = ?, descontar_saldo = ?, conta_id = ?, origem_divida = ?
       WHERE id = ? AND usuario_id = ?
     `)
     .run(
@@ -404,6 +466,8 @@ app.put('/api/lancamentos/:id', autenticar, (req, res) => {
       statusFinal,
       observacaoFinal,
       descontarValorDb,
+      contaIdFinal,
+      origemDividaFinal,
       id,
       req.usuario.id
     );
@@ -412,11 +476,7 @@ app.put('/api/lancamentos/:id', autenticar, (req, res) => {
     return res.status(404).json({ erro: 'Lançamento não encontrado.' });
   }
 
-  const atualizado = db
-    .prepare(
-      'SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, descontar_saldo, criado_em FROM lancamentos WHERE id = ?'
-    )
-    .get(id);
+  const atualizado = db.prepare(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`).get(id);
 
   return res.json({ lancamento: atualizado });
 });
@@ -446,6 +506,184 @@ app.delete('/api/lancamentos/:id', autenticar, (req, res) => {
 
   if (resultado.changes === 0) {
     return res.status(404).json({ erro: 'Lançamento não encontrado.' });
+  }
+
+  return res.json({ ok: true });
+});
+
+// ============================================================================
+// ROTAS DE CARTEIRAS / CONTAS (Onde seu dinheiro está guardado)
+// ============================================================================
+
+// 10. Listar carteiras com saldo calculado via SQL (LEFT JOIN + GROUP BY)
+app.get('/api/contas', autenticar, (req, res) => {
+  const contas = db
+    .prepare(`
+      SELECT
+        c.id,
+        c.nome,
+        c.etiqueta,
+        c.cor,
+        c.saldo_ajuste,
+        c.saldo_ajuste + COALESCE(SUM(
+          CASE
+            WHEN l.tipo = 'entrada' AND l.status = 'pago' THEN l.valor
+            WHEN l.tipo IN ('saida', 'divida') AND l.status = 'pago' AND l.descontar_saldo != 0 THEN -l.valor
+            ELSE 0
+          END
+        ), 0) AS saldo
+      FROM contas c
+      LEFT JOIN lancamentos l ON l.conta_id = c.id AND l.usuario_id = c.usuario_id
+      WHERE c.usuario_id = ?
+      GROUP BY c.id
+      ORDER BY c.id ASC
+    `)
+    .all(req.usuario.id);
+
+  const semContaRow = db
+    .prepare(`
+      SELECT COALESCE(SUM(
+        CASE
+          WHEN tipo = 'entrada' AND status = 'pago' THEN valor
+          WHEN tipo IN ('saida', 'divida') AND status = 'pago' AND descontar_saldo != 0 THEN -valor
+          ELSE 0
+        END
+      ), 0) AS total
+      FROM lancamentos
+      WHERE usuario_id = ? AND conta_id IS NULL
+    `)
+    .get(req.usuario.id);
+
+  return res.json({
+    contas,
+    saldoSemConta: semContaRow?.total || 0,
+  });
+});
+
+// 11. Criar nova carteira
+app.post('/api/contas', autenticar, (req, res) => {
+  const { nome, etiqueta, cor } = req.body;
+
+  if (!nome?.trim()) {
+    return res.status(400).json({ erro: 'Informe o nome da carteira (ex.: RecargaPay, Cofrinho).' });
+  }
+
+  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
+  const etiquetaFinal = etiqueta?.trim() || '';
+
+  const resultado = db
+    .prepare('INSERT INTO contas (usuario_id, nome, etiqueta, cor) VALUES (?, ?, ?, ?)')
+    .run(req.usuario.id, nome.trim(), etiquetaFinal, corFinal);
+
+  const criada = db
+    .prepare('SELECT id, nome, etiqueta, cor, saldo_ajuste FROM contas WHERE id = ?')
+    .get(Number(resultado.lastInsertRowid));
+
+  return res.status(201).json({ conta: { ...criada, saldo: 0 } });
+});
+
+// 12. Editar carteira
+app.put('/api/contas/:id', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+  const { nome, etiqueta, cor } = req.body;
+
+  if (!nome?.trim()) {
+    return res.status(400).json({ erro: 'Informe o nome da carteira.' });
+  }
+
+  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
+  const etiquetaFinal = etiqueta?.trim() || '';
+
+  const resultado = db
+    .prepare('UPDATE contas SET nome = ?, etiqueta = ?, cor = ? WHERE id = ? AND usuario_id = ?')
+    .run(nome.trim(), etiquetaFinal, corFinal, id, req.usuario.id);
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Carteira não encontrada.' });
+  }
+
+  const atualizada = db
+    .prepare('SELECT id, nome, etiqueta, cor, saldo_ajuste FROM contas WHERE id = ?')
+    .get(id);
+
+  return res.json({ conta: atualizada });
+});
+
+// 13. Transferir dinheiro entre carteiras (não altera o Saldo Total — apenas move entre lugares!)
+app.post('/api/contas/transferir', autenticar, (req, res) => {
+  const origemId = Number(req.body.origemId);
+  const destinoId = Number(req.body.destinoId);
+  const valor = Number(req.body.valor);
+
+  if (!Number.isInteger(origemId) || !Number.isInteger(destinoId) || origemId === destinoId) {
+    return res.status(400).json({ erro: 'Escolha duas carteiras diferentes para transferir.' });
+  }
+  if (!Number.isFinite(valor) || valor <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor maior que zero para transferir.' });
+  }
+
+  const origem = db
+    .prepare('SELECT id FROM contas WHERE id = ? AND usuario_id = ?')
+    .get(origemId, req.usuario.id);
+  const destino = db
+    .prepare('SELECT id FROM contas WHERE id = ? AND usuario_id = ?')
+    .get(destinoId, req.usuario.id);
+
+  if (!origem || !destino) {
+    return res.status(404).json({ erro: 'Carteira de origem ou destino não encontrada.' });
+  }
+
+  // Transação SQL: ou tira da origem E coloca no destino, ou nada muda!
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE contas SET saldo_ajuste = saldo_ajuste - ? WHERE id = ? AND usuario_id = ?').run(
+      valor,
+      origemId,
+      req.usuario.id
+    );
+    db.prepare('UPDATE contas SET saldo_ajuste = saldo_ajuste + ? WHERE id = ? AND usuario_id = ?').run(
+      valor,
+      destinoId,
+      req.usuario.id
+    );
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return res.json({ ok: true });
+});
+
+// 14. Excluir carteira (mantém todos os lançamentos intactos!)
+app.delete('/api/contas/:id', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+
+  const conta = db
+    .prepare('SELECT id, saldo_ajuste FROM contas WHERE id = ? AND usuario_id = ?')
+    .get(id, req.usuario.id);
+
+  if (!conta) {
+    return res.status(404).json({ erro: 'Carteira não encontrada.' });
+  }
+
+  if (Math.abs(conta.saldo_ajuste) > 0.009) {
+    return res.status(400).json({
+      erro: 'Esta carteira possui transferências ativas. Transfira o valor de volta antes de excluí-la.',
+    });
+  }
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE lancamentos SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?').run(
+      id,
+      req.usuario.id
+    );
+    db.prepare('DELETE FROM contas WHERE id = ? AND usuario_id = ?').run(id, req.usuario.id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
   }
 
   return res.json({ ok: true });

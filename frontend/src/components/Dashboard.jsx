@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import Sidebar from './Sidebar.jsx';
 import Charts from './Charts.jsx';
+import ContasSection from './ContasSection.jsx';
 import ListaLancamentos, { agruparLancamentos } from './ListaLancamentos.jsx';
 import NovoLancamentoModal from './NovoLancamentoModal.jsx';
 import ConfirmarPagamentoModal from './ConfirmarPagamentoModal.jsx';
@@ -28,12 +29,12 @@ const TITULOS_SECAO = {
     subtitulo: 'Resumo rápido do seu saldo, saídas e dívidas',
   },
   entradas: {
-    titulo: 'Entradas',
-    subtitulo: 'Tudo que entrou e está previsto para entrar',
+    titulo: 'Entradas & Carteiras',
+    subtitulo: 'Veja onde seu dinheiro está guardado, transfira entre carteiras e acompanhe suas entradas',
   },
   dividas: {
-    titulo: 'Dívidas e Parcelas',
-    subtitulo: 'Acompanhe tudo que falta pagar e adiante parcelas quando quiser',
+    titulo: 'Dívidas e Cartões',
+    subtitulo: 'Acompanhe quanto deve em cada cartão/pessoa, veja parcelas e adiante quando quiser',
   },
   saidas: {
     titulo: 'Saídas',
@@ -100,6 +101,9 @@ export default function Dashboard({ usuario, onSair }) {
   });
   const [mes, setMes] = useState(''); // '' = Tudo (Total Geral)
   const [lancamentos, setLancamentos] = useState([]);
+  const [contas, setContas] = useState([]);
+  const [saldoSemConta, setSaldoSemConta] = useState(0);
+  const [filtroOrigemDivida, setFiltroOrigemDivida] = useState('');
   const [resumo, setResumo] = useState({
     entradasRecebidas: 0,
     entradasPrevistas: 0,
@@ -122,9 +126,14 @@ export default function Dashboard({ usuario, onSair }) {
     setCarregando(true);
     setErro('');
     try {
-      const dados = await api.listarLancamentos(mesSelecionado);
-      setLancamentos(dados.lancamentos);
-      setResumo(dados.resumo);
+      const [dadosLanc, dadosContas] = await Promise.all([
+        api.listarLancamentos(mesSelecionado),
+        api.listarContas(),
+      ]);
+      setLancamentos(dadosLanc.lancamentos);
+      setResumo(dadosLanc.resumo);
+      setContas(dadosContas.contas);
+      setSaldoSemConta(dadosContas.saldoSemConta);
     } catch (err) {
       setErro(err.message);
     } finally {
@@ -243,6 +252,35 @@ export default function Dashboard({ usuario, onSair }) {
   const proximaDividaPendente = [...listaDividas]
     .filter((i) => i.status === 'pendente')
     .sort((a, b) => a.data.localeCompare(b.data))[0];
+
+  // Agrupamento de dívidas por "Cartão / Devo para" (origem_divida)
+  const mapaOrigensDivida = {};
+  for (const d of listaDividas) {
+    const chave = d.origem_divida?.trim() || 'Sem cartão informado';
+    if (!mapaOrigensDivida[chave]) {
+      mapaOrigensDivida[chave] = { nome: chave, pendente: 0, pago: 0, qtdPendentes: 0 };
+    }
+    if (d.status === 'pendente') {
+      mapaOrigensDivida[chave].pendente += d.valor;
+      mapaOrigensDivida[chave].qtdPendentes += 1;
+    } else {
+      mapaOrigensDivida[chave].pago += d.valor;
+    }
+  }
+  const origensDividaLista = Object.values(mapaOrigensDivida).sort(
+    (a, b) => b.pendente - a.pendente
+  );
+  const temOrigemInformada = listaDividas.some((d) => d.origem_divida?.trim());
+  const origensSugeridas = Array.from(
+    new Set(listaDividas.map((d) => d.origem_divida?.trim()).filter(Boolean))
+  );
+
+  const listaDividasFiltradaPorOrigem = filtroOrigemDivida
+    ? listaDividas.filter(
+        (d) =>
+          (d.origem_divida?.trim() || 'Sem cartão informado') === filtroOrigemDivida
+      )
+    : listaDividas;
 
   const saidasPendentesTotal = listaSaidas
     .filter((i) => i.status === 'pendente')
@@ -420,6 +458,8 @@ export default function Dashboard({ usuario, onSair }) {
                 lancamentos={lancamentos}
                 carregando={carregando}
                 mostrarFiltrosTipo={true}
+                recolhivel={true}
+                chaveRecolher={`financeiro_home_recolhido_${usuario.id}`}
                 textoBotaoVazio="+ Adicionar primeiro lançamento"
                 onAdicionar={() => abrirNovo('entrada')}
                 onAlternarStatus={alternarStatus}
@@ -430,9 +470,15 @@ export default function Dashboard({ usuario, onSair }) {
             </>
           )}
 
-          {/* ==================== ABA 2: ENTRADAS ==================== */}
+          {/* ==================== ABA 2: ENTRADAS & CARTEIRAS ==================== */}
           {secaoAtiva === 'entradas' && (
             <>
+              <ContasSection
+                contas={contas}
+                saldoSemConta={saldoSemConta}
+                onAtualizar={() => carregarDados(mes)}
+              />
+
               <section className="summary-grid">
                 <div className="card">
                   <span className="card-label">
@@ -520,13 +566,65 @@ export default function Dashboard({ usuario, onSair }) {
                 </div>
               </section>
 
+              {/* Resumo por Cartão / Pessoa (quando houver dívidas com origem cadastrada) */}
+              {temOrigemInformada && (
+                <section className="panel origins-panel">
+                  <div className="origins-header">
+                    <div>
+                      <h2>Quanto devo por cartão / pessoa</h2>
+                      <span className="chart-subtitle">
+                        Clique em um cartão para filtrar apenas as dívidas dele
+                      </span>
+                    </div>
+                    {filtroOrigemDivida && (
+                      <button
+                        type="button"
+                        className="btn-small"
+                        onClick={() => setFiltroOrigemDivida('')}
+                      >
+                        Mostrar todos os cartões
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="origins-grid">
+                    {origensDividaLista.map((orig) => {
+                      const ativo = filtroOrigemDivida === orig.nome;
+                      return (
+                        <button
+                          key={orig.nome}
+                          type="button"
+                          className={ativo ? 'origin-card active' : 'origin-card'}
+                          onClick={() =>
+                            setFiltroOrigemDivida(ativo ? '' : orig.nome)
+                          }
+                        >
+                          <span className="origin-card-name">{orig.nome}</span>
+                          <strong className="origin-card-value warning">
+                            {formatarMoeda(orig.pendente)}
+                          </strong>
+                          <span className="origin-card-sub">
+                            {orig.qtdPendentes}{' '}
+                            {orig.qtdPendentes === 1
+                              ? 'parcela pendente'
+                              : 'parcelas pendentes'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
               <ListaLancamentos
                 titulo={
-                  modoGeral
-                    ? 'Todas as dívidas'
-                    : `Dívidas — ${formatarMesBonito(mes)}`
+                  filtroOrigemDivida
+                    ? `Dívidas — ${filtroOrigemDivida}`
+                    : modoGeral
+                      ? 'Todas as dívidas'
+                      : `Dívidas — ${formatarMesBonito(mes)}`
                 }
-                lancamentos={listaDividas}
+                lancamentos={listaDividasFiltradaPorOrigem}
                 carregando={carregando}
                 mostrarFiltrosTipo={false}
                 textoBotaoVazio="+ Adicionar dívida"
@@ -662,6 +760,8 @@ export default function Dashboard({ usuario, onSair }) {
         aberto={modalAberto}
         itemEditando={itemEditando}
         tipoInicial={tipoNovoPadrao}
+        contas={contas}
+        origensSugeridas={origensSugeridas}
         onFechar={fecharModal}
         onSalvo={handleSalvo}
       />
@@ -669,6 +769,7 @@ export default function Dashboard({ usuario, onSair }) {
       <ConfirmarPagamentoModal
         item={itemPagando}
         saldoAtual={resumo.saldoReal}
+        contas={contas}
         onFechar={() => setItemPagando(null)}
         onConfirmado={() => carregarDados(mes)}
       />

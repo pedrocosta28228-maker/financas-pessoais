@@ -47,6 +47,8 @@ export default function NovoLancamentoModal({
   aberto,
   itemEditando,
   tipoInicial = 'entrada',
+  contas = [],
+  origensSugeridas = [],
   onFechar,
   onSalvo,
 }) {
@@ -59,6 +61,8 @@ export default function NovoLancamentoModal({
   const [data, setData] = useState(hojeIso);
   const [status, setStatus] = useState('pago');
   const [descontarSaldo, setDescontarSaldo] = useState(true);
+  const [contaId, setContaId] = useState('');
+  const [origemDivida, setOrigemDivida] = useState('');
   const [parcelas, setParcelas] = useState(1);
   const [modoValorParcela, setModoValorParcela] = useState('parcela');
   const [salvando, setSalvando] = useState(false);
@@ -77,6 +81,8 @@ export default function NovoLancamentoModal({
       setData(itemEditando.data);
       setStatus(itemEditando.status);
       setDescontarSaldo(itemEditando.descontar_saldo !== 0);
+      setContaId(itemEditando.conta_id ? String(itemEditando.conta_id) : '');
+      setOrigemDivida(itemEditando.origem_divida || '');
       setParcelas(1);
     } else {
       const tipoPadrao = ['entrada', 'saida', 'divida'].includes(tipoInicial)
@@ -89,6 +95,8 @@ export default function NovoLancamentoModal({
       setData(hojeIso());
       setStatus(tipoPadrao === 'divida' ? 'pendente' : 'pago');
       setDescontarSaldo(true);
+      setContaId('');
+      setOrigemDivida('');
       setParcelas(1);
       setModoValorParcela('parcela');
     }
@@ -139,6 +147,8 @@ export default function NovoLancamentoModal({
           data,
           status,
           descontarSaldo,
+          contaId: contaId ? Number(contaId) : null,
+          origemDivida: tipo === 'divida' ? origemDivida : '',
         });
       } else {
         const qtdParcelas =
@@ -153,6 +163,8 @@ export default function NovoLancamentoModal({
           status,
           parcelas: qtdParcelas,
           modoValorParcela,
+          contaId: contaId ? Number(contaId) : null,
+          origemDivida: tipo === 'divida' ? origemDivida : '',
         });
       }
 
@@ -379,6 +391,46 @@ export default function NovoLancamentoModal({
               </select>
             </label>
           </div>
+
+          {tipo === 'divida' && (
+            <label className="field">
+              <span>Cartão / Devo para (opcional)</span>
+              <input
+                type="text"
+                list="origens-divida-sugestoes"
+                placeholder="Ex.: Cartão da mãe, Nubank, Cartão do amigo..."
+                value={origemDivida}
+                onChange={(e) => setOrigemDivida(e.target.value)}
+              />
+              <datalist id="origens-divida-sugestoes">
+                {origensSugeridas.map((o) => (
+                  <option key={o} value={o} />
+                ))}
+              </datalist>
+            </label>
+          )}
+
+          {contas.length > 0 && (tipo !== 'divida' || status === 'pago') && (
+            <label className="field">
+              <span>
+                {tipo === 'entrada'
+                  ? 'Carteira onde o dinheiro entrou (opcional)'
+                  : 'Carteira de onde saiu (opcional)'}
+              </span>
+              <select
+                value={contaId}
+                onChange={(e) => setContaId(e.target.value)}
+              >
+                <option value="">Sem carteira específica</option>
+                {contas.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nome}
+                    {c.etiqueta ? ` (${c.etiqueta})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           {modoEdicao && tipo !== 'entrada' && status === 'pago' && (
             <label className="field">

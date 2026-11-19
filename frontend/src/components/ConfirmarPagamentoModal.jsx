@@ -22,10 +22,12 @@ function formatarData(dataIso) {
 export default function ConfirmarPagamentoModal({
   item,
   saldoAtual,
+  contas = [],
   onFechar,
   onConfirmado,
 }) {
   const [descontarSaldo, setDescontarSaldo] = useState(true);
+  const [contaId, setContaId] = useState('');
   const [valorPago, setValorPago] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
@@ -33,6 +35,7 @@ export default function ConfirmarPagamentoModal({
   useEffect(() => {
     if (!item) return;
     setDescontarSaldo(true);
+    setContaId(item.conta_id ? String(item.conta_id) : '');
     setValorPago(String(item.valor));
     setErro('');
   }, [item]);
@@ -65,6 +68,7 @@ export default function ConfirmarPagamentoModal({
       await api.atualizarStatus(item.id, 'pago', {
         descontarSaldo,
         valor: valorNum,
+        contaId: descontarSaldo && contaId ? Number(contaId) : null,
       });
       await onConfirmado();
       onFechar();
@@ -143,6 +147,23 @@ export default function ConfirmarPagamentoModal({
               </p>
             </button>
           </div>
+
+          {descontarSaldo && contas.length > 0 && (
+            <label className="field">
+              <span>De qual carteira saiu esse valor? (opcional)</span>
+              <select
+                value={contaId}
+                onChange={(e) => setContaId(e.target.value)}
+              >
+                <option value="">Sem carteira específica</option>
+                {contas.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nome} ({formatarMoeda(c.saldo)})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           {erro && <div className="alert-error">{erro}</div>}
 
