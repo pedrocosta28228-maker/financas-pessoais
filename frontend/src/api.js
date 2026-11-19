@@ -43,7 +43,9 @@ async function requisicao(caminho, opcoes = {}) {
   const dados = await resposta.json().catch(() => ({}));
 
   if (!resposta.ok) {
-    throw new Error(dados.erro || 'Erro ao comunicar com o servidor.');
+    throw new Error(
+      dados.erro || `Erro ${resposta.status} ao comunicar com o servidor. Reinicie o iniciar-app.bat se o servidor estiver desatualizado.`
+    );
   }
 
   return dados;
