@@ -35,9 +35,16 @@ db.exec(`
     data TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pago' CHECK (status IN ('pago', 'pendente')),
     observacao TEXT DEFAULT '',
+    grupo_parcela TEXT DEFAULT NULL,
     criado_em TEXT DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
   );
 `);
+
+// Migração segura: se o banco já existia antes da função de parcelas, adiciona a coluna sem perder nenhum dado
+const colunasLancamentos = db.prepare('PRAGMA table_info(lancamentos)').all();
+if (!colunasLancamentos.some((c) => c.name === 'grupo_parcela')) {
+  db.exec('ALTER TABLE lancamentos ADD COLUMN grupo_parcela TEXT DEFAULT NULL;');
+}
 
 console.log(`Banco de dados SQLite pronto em: ${dbPath}`);

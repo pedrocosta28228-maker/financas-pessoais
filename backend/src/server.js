@@ -1,11 +1,27 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db } from './db.js';
 import { hashSenha, verificarSenha, gerarToken, autenticar } from './auth.js';
+
+/**
+ * Soma N meses a uma data YYYY-MM-DD preservando o dia de vencimento
+ * (ex.: 2026-01-31 + 1 mês = 2026-02-28, e + 2 meses = 2026-03-31).
+ */
+function somarMesesSeguro(dataIso, mesesParaSomar) {
+  const [anoOrig, mesOrig, diaOrig] = dataIso.split('-').map(Number);
+  const totalMeses = anoOrig * 12 + (mesOrig - 1) + mesesParaSomar;
+  const novoAno = Math.floor(totalMeses / 12);
+  const novoMes = (totalMeses % 12) + 1;
+  const ultimoDiaDoMes = new Date(novoAno, novoMes, 0).getDate();
+  const diaFinal = Math.min(diaOrig, ultimoDiaDoMes);
+
+  return `${novoAno}-${String(novoMes).padStart(2, '0')}-${String(diaFinal).padStart(2, '0')}`;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -181,9 +197,19 @@ app.get('/api/lancamentos', autenticar, (req, res) => {
   });
 });
 
-// 5. Criar novo lançamento (entrada, saída ou dívida)
+// 5. Criar novo lançamento (entrada, saída ou dívida — com suporte a parcelamento!)
 app.post('/api/lancamentos', autenticar, (req, res) => {
-  const { titulo, valor, tipo, categoria, data, status, observacao } = req.body;
+  const {
+    titulo,
+    valor,
+    tipo,
+    categoria,
+    data,
+    status,
+    observacao,
+    parcelas,
+    modoValorParcela,
+  } = req.body;
 
   const valorNumero = Number(valor);
   const tiposValidos = ['entrada', 'saida', 'divida'];
@@ -202,30 +228,82 @@ app.post('/api/lancamentos', autenticar, (req, res) => {
     return res.status(400).json({ erro: 'Informe uma data válida (AAAA-MM-DD).' });
   }
 
+  const totalParcelas =
+    tipo === 'divida' ? Math.max(1, Math.min(60, Math.floor(Number(parcelas) || 1))) : 1;
+
   const statusFinal = statusValidos.includes(status) ? status : 'pago';
   const categoriaFinal = categoria?.trim() || 'Geral';
   const observacaoFinal = observacao?.trim() || '';
 
-  const resultado = db
-    .prepare(`
-      INSERT INTO lancamentos (usuario_id, titulo, valor, tipo, categoria, data, status, observacao)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    .run(
-      req.usuario.id,
-      titulo.trim(),
-      valorNumero,
-      tipo,
-      categoriaFinal,
-      data,
-      statusFinal,
-      observacaoFinal
-    );
+  const insertStmt = db.prepare(`
+    INSERT INTO lancamentos (usuario_id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const selectById = db.prepare(`
+    SELECT id, titulo, valor, tipo, categoria, data, status, observacao, grupo_parcela, criado_em
+    FROM lancamentos WHERE id = ?
+  `);
 
-  const criado = db
-    .prepare('SELECT id, titulo, valor, tipo, categoria, data, status, observacao, criado_em FROM lancamentos WHERE id = ?')
-    .get(Number(resultado.lastInsertRowid));
+  // Se for dívida parcelada (2x ou mais), grava todas as parcelas juntas numa Transação SQL
+  if (totalParcelas > 1) {
+    const grupoId = crypto.randomUUID();
+    const dividirTotal = modoValorParcela === 'total';
+    const valorBase = dividirTotal
+      ? Math.floor((valorNumero / totalParcelas) * 100) / 100
+      : Math.round(valorNumero * 100) / 100;
+    const diferencaCentavos = dividirTotal
+      ? Math.round((valorNumero - valorBase * totalParcelas) * 100) / 100
+      : 0;
 
+    const criados = [];
+
+    db.exec('BEGIN');
+    try {
+      for (let i = 0; i < totalParcelas; i++) {
+        const dataParcela = somarMesesSeguro(data, i);
+        const tituloParcela = `${titulo.trim()} (${i + 1}/${totalParcelas})`;
+        // Se dividiu um valor com dízima (ex.: R$ 100 / 3), ajusta os centavos na última parcela
+        const valorParcela =
+          i === totalParcelas - 1
+            ? Math.round((valorBase + diferencaCentavos) * 100) / 100
+            : valorBase;
+
+        const resultado = insertStmt.run(
+          req.usuario.id,
+          tituloParcela,
+          valorParcela,
+          tipo,
+          categoriaFinal,
+          dataParcela,
+          statusFinal,
+          observacaoFinal,
+          grupoId
+        );
+
+        criados.push(selectById.get(Number(resultado.lastInsertRowid)));
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+
+    return res.status(201).json({ lancamento: criados[0], lancamentos: criados });
+  }
+
+  const resultado = insertStmt.run(
+    req.usuario.id,
+    titulo.trim(),
+    valorNumero,
+    tipo,
+    categoriaFinal,
+    data,
+    statusFinal,
+    observacaoFinal,
+    null
+  );
+
+  const criado = selectById.get(Number(resultado.lastInsertRowid));
   return res.status(201).json({ lancamento: criado });
 });
 

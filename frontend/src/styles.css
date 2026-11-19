@@ -236,51 +236,127 @@ body {
   color: var(--muted);
 }
 
-.topbar-right {
+/* Barra de período (Tudo vs Por Mês) */
+.period-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
-  flex-wrap: wrap;
 }
 
-.period-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.period-btn {
+.period-segmented {
+  display: inline-flex;
+  background: var(--surface);
   border: 1px solid var(--border);
-  background: var(--bg);
+  border-radius: 10px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.seg-btn {
+  border: none;
+  background: transparent;
   color: var(--muted);
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 0.85rem;
+  padding: 8px 16px;
+  border-radius: 7px;
+  font-size: 0.88rem;
   font-weight: 600;
   cursor: pointer;
 }
 
-.period-btn.active {
+.seg-btn.active {
   background: var(--primary);
-  border-color: var(--primary);
   color: #fff;
 }
 
-.month-picker {
-  display: flex;
+.month-nav {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.85rem;
-  color: var(--muted);
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px 10px;
 }
 
-.month-picker input {
+.month-arrow {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--border);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.month-arrow:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.month-label {
+  min-width: 145px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+/* Bloco de parcelamento de dívida */
+.installment-box {
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.installment-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #fcd34d;
+  font-weight: 600;
+}
+
+.installment-presets {
+  display: flex;
+  gap: 5px;
+}
+
+.preset-btn {
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: var(--bg);
+  color: var(--muted);
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.preset-btn.active {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #0b1120;
+}
+
+.installment-preview {
+  font-size: 0.82rem;
+  color: #fde68a;
+  line-height: 1.45;
+  background: rgba(11, 17, 32, 0.65);
   border-radius: 8px;
-  padding: 7px 10px;
+  padding: 9px 10px;
 }
 
 .container {

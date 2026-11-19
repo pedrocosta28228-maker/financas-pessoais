@@ -7,6 +7,21 @@ const CATEGORIAS_POR_TIPO = {
   divida: ['Cartão de Crédito', 'Empréstimo', 'Parcelamento', 'Financiamento', 'Outros'],
 };
 
+const NOMES_MESES = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
+];
+
 function formatarMoeda(valor) {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
@@ -20,6 +35,19 @@ function formatarData(dataIso) {
   return `${dia}/${mes}/${ano}`;
 }
 
+function formatarMesBonito(mesIso) {
+  if (!mesIso) return '';
+  const [ano, mes] = mesIso.split('-').map(Number);
+  return `${NOMES_MESES[mes - 1]} de ${ano}`;
+}
+
+function mesAtualIso() {
+  const hoje = new Date();
+  const ano = hoje.getFullYear();
+  const mes = String(hoje.getMonth() + 1).padStart(2, '0');
+  return `${ano}-${mes}`;
+}
+
 function hojeIso() {
   const hoje = new Date();
   const ano = hoje.getFullYear();
@@ -28,8 +56,27 @@ function hojeIso() {
   return `${ano}-${mes}-${dia}`;
 }
 
+function moverMes(mesIso, delta) {
+  const [ano, mes] = mesIso.split('-').map(Number);
+  const total = ano * 12 + (mes - 1) + delta;
+  const novoAno = Math.floor(total / 12);
+  const novoMes = (total % 12) + 1;
+  return `${novoAno}-${String(novoMes).padStart(2, '0')}`;
+}
+
+function somarMesesPreview(dataIso, mesesParaSomar) {
+  if (!dataIso || !/^\d{4}-\d{2}-\d{2}$/.test(dataIso)) return '';
+  const [anoOrig, mesOrig, diaOrig] = dataIso.split('-').map(Number);
+  const totalMeses = anoOrig * 12 + (mesOrig - 1) + mesesParaSomar;
+  const novoAno = Math.floor(totalMeses / 12);
+  const novoMes = (totalMeses % 12) + 1;
+  const ultimoDia = new Date(novoAno, novoMes, 0).getDate();
+  const diaFinal = Math.min(diaOrig, ultimoDia);
+  return `${novoAno}-${String(novoMes).padStart(2, '0')}-${String(diaFinal).padStart(2, '0')}`;
+}
+
 export default function Dashboard({ usuario, onSair }) {
-  // Vazio ('') = padrão "Ver tudo" (Total Geral). Quando preenchido ('YYYY-MM'), filtra aquele mês.
+  // Vazio ('') = padrão "Tudo (Total Geral)". Quando preenchido ('YYYY-MM'), filtra aquele mês.
   const [mes, setMes] = useState('');
   const [lancamentos, setLancamentos] = useState([]);
   const [resumo, setResumo] = useState({
@@ -52,9 +99,11 @@ export default function Dashboard({ usuario, onSair }) {
   const [categoria, setCategoria] = useState('Salário');
   const [data, setData] = useState(hojeIso);
   const [status, setStatus] = useState('pago');
+  const [parcelas, setParcelas] = useState(1);
+  const [modoValorParcela, setModoValorParcela] = useState('parcela'); // 'parcela' ou 'total'
   const [salvando, setSalvando] = useState(false);
 
-  // Busca os lançamentos do mês selecionado no servidor Node.js
+  // Busca os lançamentos do período selecionado no servidor Node.js
   async function carregarDados(mesSelecionado = mes) {
     setCarregando(true);
     setErro('');
@@ -77,11 +126,11 @@ export default function Dashboard({ usuario, onSair }) {
   function trocarTipo(novoTipo) {
     setTipo(novoTipo);
     setCategoria(CATEGORIAS_POR_TIPO[novoTipo][0]);
-    // Dívida geralmente começa como "pendente" (ainda vai pagar)
     if (novoTipo === 'divida') {
       setStatus('pendente');
     } else {
       setStatus('pago');
+      setParcelas(1);
     }
   }
 
@@ -92,6 +141,9 @@ export default function Dashboard({ usuario, onSair }) {
 
     try {
       const valorNumerico = Number(String(valor).replace(',', '.'));
+      const qtdParcelas =
+        tipo === 'divida' ? Math.max(1, Math.min(60, Number(parcelas) || 1)) : 1;
+
       await api.criarLancamento({
         titulo,
         valor: valorNumerico,
@@ -99,13 +151,16 @@ export default function Dashboard({ usuario, onSair }) {
         categoria,
         data,
         status,
+        parcelas: qtdParcelas,
+        modoValorParcela,
       });
 
       setTitulo('');
       setValor('');
+      setParcelas(1);
 
       // Se estiver filtrando um mês específico diferente do lançamento, muda pra ele;
-      // se estiver em "Ver tudo" (padrão), continua vendo o total geral!
+      // se estiver em "Tudo (Total Geral)", continua vendo o total geral!
       const mesDoLancamento = data.slice(0, 7);
       if (mes && mesDoLancamento !== mes) {
         setMes(mesDoLancamento);
@@ -139,6 +194,21 @@ export default function Dashboard({ usuario, onSair }) {
   }
 
   const modoGeral = !mes;
+  const qtdParcelasValida = Math.max(1, Math.min(60, Number(parcelas) || 1));
+  const valorDigitadoNum = Number(String(valor).replace(',', '.'));
+  const temPreviewParcelas =
+    tipo === 'divida' && qtdParcelasValida > 1 && valorDigitadoNum > 0 && data;
+
+  const valorCadaParcelaPreview =
+    modoValorParcela === 'total'
+      ? valorDigitadoNum / qtdParcelasValida
+      : valorDigitadoNum;
+  const totalDividaPreview =
+    modoValorParcela === 'total'
+      ? valorDigitadoNum
+      : valorDigitadoNum * qtdParcelasValida;
+  const ultimaDataPreview = somarMesesPreview(data, qtdParcelasValida - 1);
+  const diaVencimento = data ? data.split('-')[2] : '';
 
   const lancamentosFiltrados = lancamentos.filter((item) => {
     if (filtro === 'todos') return true;
@@ -148,7 +218,7 @@ export default function Dashboard({ usuario, onSair }) {
 
   return (
     <div className="dashboard">
-      {/* Barra superior */}
+      {/* Barra superior limpa */}
       <header className="topbar">
         <div className="topbar-left">
           <div className="logo-badge small">R$</div>
@@ -158,32 +228,64 @@ export default function Dashboard({ usuario, onSair }) {
           </div>
         </div>
 
-        <div className="topbar-right">
-          <div className="period-controls">
-            <button
-              type="button"
-              className={modoGeral ? 'period-btn active' : 'period-btn'}
-              onClick={() => setMes('')}
-            >
-              Ver tudo (Total)
-            </button>
-            <label className="month-picker">
-              <span>Filtrar mês:</span>
-              <input
-                type="month"
-                value={mes}
-                onChange={(e) => setMes(e.target.value)}
-              />
-            </label>
-          </div>
-          <button type="button" className="btn-outline" onClick={onSair}>
-            Sair
-          </button>
-        </div>
+        <button type="button" className="btn-outline" onClick={onSair}>
+          Sair
+        </button>
       </header>
 
       <main className="container">
         {erro && <div className="alert-error">{erro}</div>}
+
+        {/* Barra de período (Total Geral por padrão ou navegação limpa por mês) */}
+        <section className="period-bar">
+          <div className="period-segmented">
+            <button
+              type="button"
+              className={modoGeral ? 'seg-btn active' : 'seg-btn'}
+              onClick={() => setMes('')}
+            >
+              Tudo (Total Geral)
+            </button>
+            <button
+              type="button"
+              className={!modoGeral ? 'seg-btn active' : 'seg-btn'}
+              onClick={() => setMes(mes || mesAtualIso())}
+            >
+              Por Mês
+            </button>
+          </div>
+
+          {!modoGeral && (
+            <div className="month-nav">
+              <button
+                type="button"
+                className="month-arrow"
+                onClick={() => setMes((atual) => moverMes(atual, -1))}
+                title="Mês anterior"
+              >
+                ‹
+              </button>
+              <span className="month-label">{formatarMesBonito(mes)}</span>
+              <button
+                type="button"
+                className="month-arrow"
+                onClick={() => setMes((atual) => moverMes(atual, 1))}
+                title="Próximo mês"
+              >
+                ›
+              </button>
+              {mes !== mesAtualIso() && (
+                <button
+                  type="button"
+                  className="btn-small"
+                  onClick={() => setMes(mesAtualIso())}
+                >
+                  Mês atual
+                </button>
+              )}
+            </div>
+          )}
+        </section>
 
         {/* Cards de resumo */}
         <section className="summary-grid">
@@ -277,7 +379,7 @@ export default function Dashboard({ usuario, onSair }) {
                     tipo === 'entrada'
                       ? 'Ex.: Salário, Freelance...'
                       : tipo === 'divida'
-                        ? 'Ex.: Fatura Cartão, Parcela 2/6...'
+                        ? 'Ex.: Celular no Cartão, Empréstimo...'
                         : 'Ex.: Mercado, Energia, Aluguel...'
                   }
                   value={titulo}
@@ -288,7 +390,13 @@ export default function Dashboard({ usuario, onSair }) {
 
               <div className="field-row">
                 <label className="field">
-                  <span>Valor (R$)</span>
+                  <span>
+                    {tipo === 'divida' && qtdParcelasValida > 1
+                      ? modoValorParcela === 'total'
+                        ? 'Valor total (R$)'
+                        : 'Valor da parcela (R$)'
+                      : 'Valor (R$)'}
+                  </span>
                   <input
                     type="number"
                     step="0.01"
@@ -301,7 +409,13 @@ export default function Dashboard({ usuario, onSair }) {
                 </label>
 
                 <label className="field">
-                  <span>Data</span>
+                  <span>
+                    {tipo === 'divida'
+                      ? qtdParcelasValida > 1
+                        ? '1º Vencimento'
+                        : 'Vencimento'
+                      : 'Data'}
+                  </span>
                   <input
                     type="date"
                     value={data}
@@ -310,6 +424,65 @@ export default function Dashboard({ usuario, onSair }) {
                   />
                 </label>
               </div>
+
+              {/* Opções de parcelamento exclusivas para Dívidas */}
+              {tipo === 'divida' && (
+                <div className="installment-box">
+                  <div className="installment-header">
+                    <span>Quantas parcelas faltam?</span>
+                    <div className="installment-presets">
+                      {[1, 3, 6, 12].map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className={
+                            qtdParcelasValida === n ? 'preset-btn active' : 'preset-btn'
+                          }
+                          onClick={() => setParcelas(n)}
+                        >
+                          {n}x
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-row">
+                    <label className="field">
+                      <span>Número de parcelas</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="60"
+                        value={parcelas}
+                        onChange={(e) => setParcelas(e.target.value)}
+                      />
+                    </label>
+
+                    {qtdParcelasValida > 1 && (
+                      <label className="field">
+                        <span>O valor acima é:</span>
+                        <select
+                          value={modoValorParcela}
+                          onChange={(e) => setModoValorParcela(e.target.value)}
+                        >
+                          <option value="parcela">De cada parcela</option>
+                          <option value="total">Total (dividir)</option>
+                        </select>
+                      </label>
+                    )}
+                  </div>
+
+                  {temPreviewParcelas && (
+                    <div className="installment-preview">
+                      Serão geradas <strong>{qtdParcelasValida} parcelas</strong> de{' '}
+                      <strong>{formatarMoeda(valorCadaParcelaPreview)}</strong> (Total:{' '}
+                      <strong>{formatarMoeda(totalDividaPreview)}</strong>), todo dia{' '}
+                      <strong>{diaVencimento}</strong> — de {formatarData(data)} até{' '}
+                      {formatarData(ultimaDataPreview)}.
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="field-row">
                 <label className="field">
@@ -343,7 +516,11 @@ export default function Dashboard({ usuario, onSair }) {
               </div>
 
               <button type="submit" className="btn-primary" disabled={salvando}>
-                {salvando ? 'Salvando...' : 'Adicionar lançamento'}
+                {salvando
+                  ? 'Salvando...'
+                  : tipo === 'divida' && qtdParcelasValida > 1
+                    ? `Adicionar ${qtdParcelasValida} parcelas da dívida`
+                    : 'Adicionar lançamento'}
               </button>
             </form>
           </section>
@@ -351,7 +528,11 @@ export default function Dashboard({ usuario, onSair }) {
           {/* Lista de lançamentos */}
           <section className="panel">
             <div className="panel-header">
-              <h2>{modoGeral ? 'Todos os lançamentos' : 'Lançamentos do mês'}</h2>
+              <h2>
+                {modoGeral
+                  ? 'Todos os lançamentos'
+                  : `Lançamentos — ${formatarMesBonito(mes)}`}
+              </h2>
               <div className="filter-pills">
                 {[
                   { id: 'todos', label: 'Todos' },
@@ -376,7 +557,7 @@ export default function Dashboard({ usuario, onSair }) {
               <p className="empty-state">Carregando lançamentos...</p>
             ) : lancamentosFiltrados.length === 0 ? (
               <p className="empty-state">
-                Nenhum lançamento encontrado neste mês. Adicione seu salário, gastos ou dívidas ao lado!
+                Nenhum lançamento encontrado neste período. Adicione seu salário, gastos ou dívidas ao lado!
               </p>
             ) : (
               <ul className="entry-list">
