@@ -28,10 +28,17 @@ async function requisicao(caminho, opcoes = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const resposta = await fetch(`/api${caminho}`, {
-    ...opcoes,
-    headers,
-  });
+  let resposta;
+  try {
+    resposta = await fetch(`/api${caminho}`, {
+      ...opcoes,
+      headers,
+    });
+  } catch {
+    throw new Error(
+      'Não foi possível conectar ao servidor. Verifique se a janela do iniciar-app.bat continua aberta.'
+    );
+  }
 
   const dados = await resposta.json().catch(() => ({}));
 

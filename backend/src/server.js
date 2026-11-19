@@ -1,8 +1,14 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { db } from './db.js';
 import { hashSenha, verificarSenha, gerarToken, autenticar } from './auth.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -263,6 +269,16 @@ app.delete('/api/lancamentos/:id', autenticar, (req, res) => {
   return res.json({ ok: true });
 });
 
-app.listen(PORT, () => {
+// Serve o Frontend React compilado (frontend/dist) se existir, permitindo rodar tudo em 1 único servidor
+const frontendDist = path.join(__dirname, '..', '..', 'frontend', 'dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
+
+app.listen(PORT, '127.0.0.1', () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);
 });
