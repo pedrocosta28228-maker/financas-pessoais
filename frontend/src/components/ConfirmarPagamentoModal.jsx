@@ -144,11 +144,6 @@ export default function ConfirmarPagamentoModal({
             </button>
           </div>
 
-          <p className="pay-tip">
-            Pode testar tranquilo: se marcar errado, basta clicar em{' '}
-            <strong>Desfazer pago</strong> depois que tudo volta ao normal!
-          </p>
-
           {erro && <div className="alert-error">{erro}</div>}
 
           <div className="modal-actions">

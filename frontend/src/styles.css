@@ -1130,16 +1130,6 @@ body {
   color: #86efac;
 }
 
-.pay-tip {
-  font-size: 0.8rem;
-  color: var(--muted);
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px dashed var(--border);
-  border-radius: 9px;
-  padding: 9px 11px;
-  line-height: 1.4;
-}
-
 @media (max-width: 900px) {
   .charts-grid {
     grid-template-columns: 1fr;
