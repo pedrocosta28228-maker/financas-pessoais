@@ -46,6 +46,7 @@ function somarMesesPreview(dataIso, mesesParaSomar) {
 export default function NovoLancamentoModal({
   aberto,
   itemEditando,
+  tipoInicial = 'entrada',
   onFechar,
   onSalvo,
 }) {
@@ -78,17 +79,20 @@ export default function NovoLancamentoModal({
       setDescontarSaldo(itemEditando.descontar_saldo !== 0);
       setParcelas(1);
     } else {
-      setTipo('entrada');
+      const tipoPadrao = ['entrada', 'saida', 'divida'].includes(tipoInicial)
+        ? tipoInicial
+        : 'entrada';
+      setTipo(tipoPadrao);
       setTitulo('');
       setValor('');
-      setCategoria('Salário');
+      setCategoria(CATEGORIAS_POR_TIPO[tipoPadrao][0]);
       setData(hojeIso());
-      setStatus('pago');
+      setStatus(tipoPadrao === 'divida' ? 'pendente' : 'pago');
       setDescontarSaldo(true);
       setParcelas(1);
       setModoValorParcela('parcela');
     }
-  }, [aberto, itemEditando]);
+  }, [aberto, itemEditando, tipoInicial]);
 
   // Fecha o modal ao apertar ESC
   useEffect(() => {
