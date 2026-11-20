@@ -113,6 +113,7 @@ export default function EstatisticasView({
     // Monta a projeção para os próximos 12 meses (a partir do mês atual)
     const meses = [];
     let saldoAcumulado = resumoGeral.saldoReal;
+    let dividaRestante = resumoGeral.dividasPendentes;
 
     for (let i = 0; i < 12; i++) {
       const m = somarMesIso(anoHoje, mesHoje, i);
@@ -140,6 +141,7 @@ export default function EstatisticasView({
         salarioPrevistoMes + (entradasPendentesPorMes[m.iso] || 0);
       const sobraMes = entradasPrevistasMes - saidasPrevistasMes;
       saldoAcumulado += sobraMes;
+      dividaRestante = Math.max(0, Math.round((dividaRestante - dividasMes) * 100) / 100);
 
       meses.push({
         ...m,
@@ -149,6 +151,7 @@ export default function EstatisticasView({
         saidasPrevistasMes,
         sobraMes,
         saldoAcumulado,
+        dividaRestante,
       });
     }
 
@@ -186,31 +189,45 @@ export default function EstatisticasView({
 
   const mesFoco = analise.meses[mesSelecionadoIdx] || analise.meses[0];
 
-  // Geometria do Gráfico de Linha (Projeção de Saldo Acumulado)
+  // Geometria do Gráfico de Linha duplo (Saldo Acumulado x Dívida Restante)
   const svgW = 760;
-  const svgH = 220;
-  const padX = 48;
+  const svgH = 235;
+  const padX = 52;
   const padTop = 20;
   const padBottom = 34;
   const plotW = svgW - padX * 2;
   const plotH = svgH - padTop - padBottom;
 
-  const valoresLinha = analise.meses.map((m) => m.saldoAcumulado);
-  const minLinha = Math.min(...valoresLinha, 0);
-  const maxLinha = Math.max(...valoresLinha, 100);
+  const valoresTodos = analise.meses.flatMap((m) => [
+    m.saldoAcumulado,
+    m.dividaRestante,
+  ]);
+  const minLinha = Math.min(...valoresTodos, 0);
+  const maxLinha = Math.max(...valoresTodos, 100);
   const rangeLinha = Math.max(maxLinha - minLinha, 1);
+
+  const mapY = (v) => padTop + plotH - ((v - minLinha) / rangeLinha) * plotH;
 
   const pontosLinha = analise.meses.map((m, idx) => {
     const x = padX + (idx / (analise.meses.length - 1)) * plotW;
-    const y = padTop + plotH - ((m.saldoAcumulado - minLinha) / rangeLinha) * plotH;
-    return { x, y, ...m, idx };
+    return {
+      x,
+      ySaldo: mapY(m.saldoAcumulado),
+      yDivida: mapY(m.dividaRestante),
+      ...m,
+      idx,
+    };
   });
 
-  const pathLinha = pontosLinha
-    .map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+  const pathSaldo = pontosLinha
+    .map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.ySaldo.toFixed(1)}`)
+    .join(' ');
+  const pathDivida = pontosLinha
+    .map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.yDivida.toFixed(1)}`)
     .join(' ');
   const baseY = padTop + plotH;
-  const pathArea = `${pathLinha} L ${pontosLinha[pontosLinha.length - 1].x.toFixed(1)} ${baseY} L ${pontosLinha[0].x.toFixed(1)} ${baseY} Z`;
+  const pathAreaSaldo = `${pathSaldo} L ${pontosLinha[pontosLinha.length - 1].x.toFixed(1)} ${baseY} L ${pontosLinha[0].x.toFixed(1)} ${baseY} Z`;
+  const pathAreaDivida = `${pathDivida} L ${pontosLinha[pontosLinha.length - 1].x.toFixed(1)} ${baseY} L ${pontosLinha[0].x.toFixed(1)} ${baseY} Z`;
 
   // Geometria do Gráfico de Colunas Agrupadas (Salário/Entradas x Dívidas/Saídas)
   const maxBarra = Math.max(
@@ -310,6 +327,12 @@ export default function EstatisticasView({
               </strong>
             </div>
             <div>
+              <span>Dívida restante</span>
+              <strong className="warning">
+                {formatarMoeda(mesFoco.dividaRestante)}
+              </strong>
+            </div>
+            <div>
               <span>Saldo acumulado</span>
               <strong
                 className={mesFoco.saldoAcumulado >= 0 ? 'positive' : 'negative'}
@@ -321,13 +344,24 @@ export default function EstatisticasView({
         </section>
       )}
 
-      {/* Gráfico 1: Evolução do Saldo Acumulado (12 meses) */}
+      {/* Gráfico 1: Evolução do Saldo Acumulado x Dívida Restante (12 meses) */}
       <section className="panel chart-panel">
         <div className="chart-header">
           <div>
-            <h2>Evolução do seu dinheiro (próximos 12 meses)</h2>
+            <h2>Evolução: Seu dinheiro × Dívida restante (12 meses)</h2>
             <span className="chart-subtitle">
-              Passe o mouse ou clique em um mês para ver exatamente quanto terá guardado
+              Acompanhe seu saldo subindo enquanto o total restante de dívidas cai mês a mês
+            </span>
+          </div>
+
+          <div className="inline-legend">
+            <span>
+              <i className="legend-dot" style={{ backgroundColor: '#22c55e' }} />
+              Saldo acumulado
+            </span>
+            <span>
+              <i className="legend-dot" style={{ backgroundColor: '#f59e0b' }} />
+              Dívida restante
             </span>
           </div>
         </div>
@@ -337,12 +371,16 @@ export default function EstatisticasView({
             viewBox={`0 0 ${svgW} ${svgH}`}
             className="line-chart-svg"
             role="img"
-            aria-label="Gráfico de evolução do saldo nos próximos 12 meses"
+            aria-label="Gráfico comparando evolução do saldo e dívida restante nos próximos 12 meses"
           >
             <defs>
               <linearGradient id="saldoAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#22c55e" stopOpacity="0.32" />
+                <stop offset="0%" stopColor="#22c55e" stopOpacity="0.28" />
                 <stop offset="100%" stopColor="#22c55e" stopOpacity="0.02" />
+              </linearGradient>
+              <linearGradient id="dividaAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.22" />
+                <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.01" />
               </linearGradient>
             </defs>
 
@@ -367,10 +405,35 @@ export default function EstatisticasView({
               );
             })}
 
-            {/* Área preenchida e linha */}
-            <path d={pathArea} fill="url(#saldoAreaGrad)" />
+            {/* Linha guia vertical no mês selecionado */}
+            {pontosLinha[mesSelecionadoIdx] && (
+              <line
+                x1={pontosLinha[mesSelecionadoIdx].x}
+                y1={padTop}
+                x2={pontosLinha[mesSelecionadoIdx].x}
+                y2={baseY}
+                stroke="#3b82f6"
+                strokeOpacity="0.45"
+                strokeDasharray="3 3"
+              />
+            )}
+
+            {/* Área e linha da Dívida Restante (amarelo/laranja caindo) */}
+            <path d={pathAreaDivida} fill="url(#dividaAreaGrad)" />
             <path
-              d={pathLinha}
+              d={pathDivida}
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth="2.8"
+              strokeDasharray="6 4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+
+            {/* Área e linha do Saldo Acumulado (verde subindo) */}
+            <path d={pathAreaSaldo} fill="url(#saldoAreaGrad)" />
+            <path
+              d={pathSaldo}
               fill="none"
               stroke="#22c55e"
               strokeWidth="3"
@@ -378,7 +441,7 @@ export default function EstatisticasView({
               strokeLinejoin="round"
             />
 
-            {/* Pontos clicáveis por mês */}
+            {/* Pontos interativos por mês (Saldo + Dívida) */}
             {pontosLinha.map((p) => {
               const ativo = p.idx === mesSelecionadoIdx;
               return (
@@ -388,9 +451,25 @@ export default function EstatisticasView({
                   onMouseEnter={() => setMesSelecionadoIdx(p.idx)}
                   onClick={() => setMesSelecionadoIdx(p.idx)}
                 >
+                  {/* Área invisível mais larga pra facilitar o hover/clique */}
+                  <rect
+                    x={p.x - 24}
+                    y={padTop}
+                    width={48}
+                    height={plotH + padBottom}
+                    fill="transparent"
+                  />
                   <circle
                     cx={p.x}
-                    cy={p.y}
+                    cy={p.yDivida}
+                    r={ativo ? 6 : 3.5}
+                    fill="#f59e0b"
+                    stroke="#0b1120"
+                    strokeWidth="2"
+                  />
+                  <circle
+                    cx={p.x}
+                    cy={p.ySaldo}
                     r={ativo ? 6.5 : 4}
                     fill={p.saldoAcumulado >= 0 ? '#22c55e' : '#ef4444'}
                     stroke="#0b1120"
