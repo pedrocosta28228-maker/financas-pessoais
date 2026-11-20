@@ -523,6 +523,7 @@ app.get('/api/contas', autenticar, (req, res) => {
         c.id,
         c.nome,
         c.etiqueta,
+        c.rendimento,
         c.cor,
         c.saldo_ajuste,
         c.saldo_ajuste + COALESCE(SUM(
@@ -562,7 +563,7 @@ app.get('/api/contas', autenticar, (req, res) => {
 
 // 11. Criar nova carteira
 app.post('/api/contas', autenticar, (req, res) => {
-  const { nome, etiqueta, cor } = req.body;
+  const { nome, etiqueta, rendimento, cor } = req.body;
 
   if (!nome?.trim()) {
     return res.status(400).json({ erro: 'Informe o nome da carteira (ex.: RecargaPay, Cofrinho).' });
@@ -570,13 +571,14 @@ app.post('/api/contas', autenticar, (req, res) => {
 
   const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
   const etiquetaFinal = etiqueta?.trim() || '';
+  const rendimentoFinal = rendimento?.trim() || '';
 
   const resultado = db
-    .prepare('INSERT INTO contas (usuario_id, nome, etiqueta, cor) VALUES (?, ?, ?, ?)')
-    .run(req.usuario.id, nome.trim(), etiquetaFinal, corFinal);
+    .prepare('INSERT INTO contas (usuario_id, nome, etiqueta, rendimento, cor) VALUES (?, ?, ?, ?, ?)')
+    .run(req.usuario.id, nome.trim(), etiquetaFinal, rendimentoFinal, corFinal);
 
   const criada = db
-    .prepare('SELECT id, nome, etiqueta, cor, saldo_ajuste FROM contas WHERE id = ?')
+    .prepare('SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ?')
     .get(Number(resultado.lastInsertRowid));
 
   return res.status(201).json({ conta: { ...criada, saldo: 0 } });
@@ -585,7 +587,7 @@ app.post('/api/contas', autenticar, (req, res) => {
 // 12. Editar carteira
 app.put('/api/contas/:id', autenticar, (req, res) => {
   const id = Number(req.params.id);
-  const { nome, etiqueta, cor } = req.body;
+  const { nome, etiqueta, rendimento, cor } = req.body;
 
   if (!nome?.trim()) {
     return res.status(400).json({ erro: 'Informe o nome da carteira.' });
@@ -593,17 +595,18 @@ app.put('/api/contas/:id', autenticar, (req, res) => {
 
   const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
   const etiquetaFinal = etiqueta?.trim() || '';
+  const rendimentoFinal = rendimento?.trim() || '';
 
   const resultado = db
-    .prepare('UPDATE contas SET nome = ?, etiqueta = ?, cor = ? WHERE id = ? AND usuario_id = ?')
-    .run(nome.trim(), etiquetaFinal, corFinal, id, req.usuario.id);
+    .prepare('UPDATE contas SET nome = ?, etiqueta = ?, rendimento = ?, cor = ? WHERE id = ? AND usuario_id = ?')
+    .run(nome.trim(), etiquetaFinal, rendimentoFinal, corFinal, id, req.usuario.id);
 
   if (resultado.changes === 0) {
     return res.status(404).json({ erro: 'Carteira não encontrada.' });
   }
 
   const atualizada = db
-    .prepare('SELECT id, nome, etiqueta, cor, saldo_ajuste FROM contas WHERE id = ?')
+    .prepare('SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ?')
     .get(id);
 
   return res.json({ conta: atualizada });

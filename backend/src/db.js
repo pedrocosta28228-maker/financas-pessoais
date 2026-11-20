@@ -30,6 +30,7 @@ db.exec(`
     usuario_id INTEGER NOT NULL,
     nome TEXT NOT NULL,
     etiqueta TEXT NOT NULL DEFAULT '',
+    rendimento TEXT NOT NULL DEFAULT '',
     cor TEXT NOT NULL DEFAULT '#3b82f6',
     saldo_ajuste REAL NOT NULL DEFAULT 0,
     criado_em TEXT DEFAULT (datetime('now', 'localtime')),
@@ -69,6 +70,11 @@ db.exec(`
 `);
 
 // Migrações seguras: adiciona novas colunas em bancos já existentes sem perder nenhum dado
+const colunasContas = db.prepare('PRAGMA table_info(contas)').all();
+if (!colunasContas.some((c) => c.name === 'rendimento')) {
+  db.exec("ALTER TABLE contas ADD COLUMN rendimento TEXT NOT NULL DEFAULT '';");
+}
+
 const colunasLancamentos = db.prepare('PRAGMA table_info(lancamentos)').all();
 if (!colunasLancamentos.some((c) => c.name === 'grupo_parcela')) {
   db.exec('ALTER TABLE lancamentos ADD COLUMN grupo_parcela TEXT DEFAULT NULL;');

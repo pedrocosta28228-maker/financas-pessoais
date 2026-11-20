@@ -28,6 +28,7 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
   const [contaEditando, setContaEditando] = useState(null);
   const [nome, setNome] = useState('');
   const [etiqueta, setEtiqueta] = useState('');
+  const [rendimento, setRendimento] = useState('');
   const [cor, setCor] = useState(CORES_CARTEIRA[0]);
   const [salvandoConta, setSalvandoConta] = useState(false);
   const [erroConta, setErroConta] = useState('');
@@ -67,6 +68,7 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
     setContaEditando(null);
     setNome('');
     setEtiqueta('');
+    setRendimento('');
     setCor(CORES_CARTEIRA[contas.length % CORES_CARTEIRA.length]);
     setErroConta('');
     setModalContaAberto(true);
@@ -76,6 +78,7 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
     setContaEditando(conta);
     setNome(conta.nome);
     setEtiqueta(conta.etiqueta || '');
+    setRendimento(conta.rendimento || '');
     setCor(conta.cor || CORES_CARTEIRA[0]);
     setErroConta('');
     setModalContaAberto(true);
@@ -87,9 +90,9 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
     setSalvandoConta(true);
     try {
       if (contaEditando) {
-        await api.atualizarConta(contaEditando.id, { nome, etiqueta, cor });
+        await api.atualizarConta(contaEditando.id, { nome, etiqueta, rendimento, cor });
       } else {
-        await api.criarConta({ nome, etiqueta, cor });
+        await api.criarConta({ nome, etiqueta, rendimento, cor });
       }
       await onAtualizar();
       setModalContaAberto(false);
@@ -204,6 +207,12 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
                 {formatarMoeda(conta.saldo)}
               </strong>
 
+              {conta.rendimento && (
+                <div className="wallet-yield">
+                  <span>↗ Rendendo {conta.rendimento}</span>
+                </div>
+              )}
+
               <div className="wallet-footer">
                 <button
                   type="button"
@@ -276,11 +285,39 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
                 <span>Etiqueta (opcional)</span>
                 <input
                   type="text"
-                  placeholder="Ex.: 110% CDI, Reserva de emergência, Pix diário..."
+                  placeholder="Ex.: Reserva de emergência, Cofrinho, Pix diário..."
                   value={etiqueta}
                   onChange={(e) => setEtiqueta(e.target.value)}
                 />
               </label>
+
+              <div className="field">
+                <div className="day-header">
+                  <span>Quanto está rendendo? (opcional)</span>
+                  <div className="day-presets">
+                    {['100% CDI', '102% CDI', '110% CDI'].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        className={
+                          rendimento === preset ? 'preset-btn active' : 'preset-btn'
+                        }
+                        onClick={() =>
+                          setRendimento(rendimento === preset ? '' : preset)
+                        }
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  placeholder="Deixe vazio se não render — ou escreva ex.: 110% CDI, 1% ao mês"
+                  value={rendimento}
+                  onChange={(e) => setRendimento(e.target.value)}
+                />
+              </div>
 
               <div className="field">
                 <span>Cor de identificação</span>
