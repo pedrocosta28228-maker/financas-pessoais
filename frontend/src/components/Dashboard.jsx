@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import Sidebar from './Sidebar.jsx';
 import Charts from './Charts.jsx';
 import ContasSection from './ContasSection.jsx';
+import EstatisticasView from './EstatisticasView.jsx';
 import ListaLancamentos, { agruparLancamentos } from './ListaLancamentos.jsx';
 import NovoLancamentoModal from './NovoLancamentoModal.jsx';
 import ConfirmarPagamentoModal from './ConfirmarPagamentoModal.jsx';
@@ -42,8 +43,8 @@ const TITULOS_SECAO = {
     subtitulo: 'Controle de gastos pagos e contas a vencer',
   },
   estatisticas: {
-    titulo: 'Estatísticas',
-    subtitulo: 'Histórico total de entradas e visão por categoria',
+    titulo: 'Estatísticas e Projeção',
+    subtitulo: 'Evolução do saldo nos próximos 12 meses, queda das dívidas e previsão de quitação',
   },
   metas: {
     titulo: 'Metas',
@@ -140,6 +141,7 @@ export default function Dashboard({ usuario, onSair }) {
   });
   const [mes, setMes] = useState(''); // '' = Tudo (Total Geral)
   const [lancamentos, setLancamentos] = useState([]);
+  const [lancamentosTodos, setLancamentosTodos] = useState([]);
   const [contas, setContas] = useState([]);
   const [saldoSemConta, setSaldoSemConta] = useState(0);
   const [salarioConfig, setSalarioConfig] = useState(null);
@@ -147,6 +149,16 @@ export default function Dashboard({ usuario, onSair }) {
   const [modoSalarioModal, setModoSalarioModal] = useState(null); // null | 'configurar' | 'receber'
   const [filtroOrigemDivida, setFiltroOrigemDivida] = useState('');
   const [resumo, setResumo] = useState({
+    entradasRecebidas: 0,
+    entradasPrevistas: 0,
+    saidasPagas: 0,
+    saidasPagasPorFora: 0,
+    saidasAPagar: 0,
+    dividasPendentes: 0,
+    saldoReal: 0,
+    saldoPrevisto: 0,
+  });
+  const [resumoGeral, setResumoGeral] = useState({
     entradasRecebidas: 0,
     entradasPrevistas: 0,
     saidasPagas: 0,
@@ -168,13 +180,22 @@ export default function Dashboard({ usuario, onSair }) {
     setCarregando(true);
     setErro('');
     try {
-      const [dadosLanc, dadosContas, dadosSalario] = await Promise.all([
+      const promessas = [
         api.listarLancamentos(mesSelecionado),
         api.listarContas(),
         api.obterSalario(),
-      ]);
+      ];
+      if (mesSelecionado) {
+        promessas.push(api.listarLancamentos(''));
+      }
+
+      const [dadosLanc, dadosContas, dadosSalario, dadosGerais] =
+        await Promise.all(promessas);
+
       setLancamentos(dadosLanc.lancamentos);
       setResumo(dadosLanc.resumo);
+      setLancamentosTodos(dadosGerais ? dadosGerais.lancamentos : dadosLanc.lancamentos);
+      setResumoGeral(dadosGerais ? dadosGerais.resumo : dadosLanc.resumo);
       setContas(dadosContas.contas);
       setSaldoSemConta(dadosContas.saldoSemConta);
       setSalarioConfig(dadosSalario.salario);
@@ -336,19 +357,6 @@ export default function Dashboard({ usuario, onSair }) {
     .filter((i) => i.status === 'pago')
     .reduce((acc, i) => acc + i.valor, 0);
 
-  // Agrupamento por categoria para a aba Estatísticas
-  const mapaCategorias = {};
-  for (const item of lancamentos) {
-    if (item.tipo === 'saida' || item.tipo === 'divida') {
-      mapaCategorias[item.categoria] =
-        (mapaCategorias[item.categoria] || 0) + item.valor;
-    }
-  }
-  const categoriasOrdenadas = Object.entries(mapaCategorias)
-    .map(([categoria, valor]) => ({ categoria, valor }))
-    .sort((a, b) => b.valor - a.valor);
-  const maxCategoria = Math.max(...categoriasOrdenadas.map((c) => c.valor), 1);
-
   const tipoBotaoTopo =
     secaoAtiva === 'dividas'
       ? 'divida'
@@ -398,7 +406,7 @@ export default function Dashboard({ usuario, onSair }) {
           {erro && <div className="alert-error">{erro}</div>}
 
           {/* Barra de período (exibida nas seções que filtram por mês/total) */}
-          {secaoAtiva !== 'metas' && (
+          {secaoAtiva !== 'metas' && secaoAtiva !== 'estatisticas' && (
             <section className="period-bar">
               <div className="period-segmented">
                 <button
@@ -780,70 +788,14 @@ export default function Dashboard({ usuario, onSair }) {
             </>
           )}
 
-          {/* ==================== ABA 5: ESTATÍSTICAS ==================== */}
+          {/* ==================== ABA 5: ESTATÍSTICAS E PROJEÇÃO ==================== */}
           {secaoAtiva === 'estatisticas' && (
-            <>
-              <section className="summary-grid">
-                <div className="card">
-                  <span className="card-label">
-                    {modoGeral ? 'Total Que Já Entrou Até Hoje' : 'Entradas do Mês'}
-                  </span>
-                  <strong className="card-value positive">
-                    {formatarMoeda(resumo.entradasRecebidas)}
-                  </strong>
-                  <span className="card-sub">Histórico acumulado de entradas recebidas</span>
-                </div>
-
-                <div className="card">
-                  <span className="card-label">Saídas Pagas (do Saldo)</span>
-                  <strong className="card-value negative">
-                    {formatarMoeda(resumo.saidasPagas)}
-                  </strong>
-                  <span className="card-sub">
-                    {resumo.saidasPagasPorFora > 0
-                      ? `+ ${formatarMoeda(resumo.saidasPagasPorFora)} pagos por fora`
-                      : 'Total descontado do seu saldo'}
-                  </span>
-                </div>
-
-                <div className="card">
-                  <span className="card-label">Comprometido em Dívidas</span>
-                  <strong className="card-value warning">
-                    {formatarMoeda(resumo.dividasPendentes)}
-                  </strong>
-                  <span className="card-sub">Parcelas pendentes no período</span>
-                </div>
-              </section>
-
-              <section className="panel">
-                <h2>Gastos e dívidas por categoria</h2>
-                {categoriasOrdenadas.length === 0 ? (
-                  <p className="empty-state">
-                    Nenhuma saída ou dívida registrada neste período ainda.
-                  </p>
-                ) : (
-                  <div className="stats-bars">
-                    {categoriasOrdenadas.map((cat) => {
-                      const pct = Math.max(5, (cat.valor / maxCategoria) * 100);
-                      return (
-                        <div key={cat.categoria} className="stat-bar-row">
-                          <div className="stat-bar-top">
-                            <span>{cat.categoria}</span>
-                            <strong>{formatarMoeda(cat.valor)}</strong>
-                          </div>
-                          <div className="stat-bar-track">
-                            <div
-                              className="stat-bar-fill"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            </>
+            <EstatisticasView
+              lancamentosTodos={lancamentosTodos}
+              resumoGeral={resumoGeral}
+              salarioConfig={salarioConfig}
+              onConfigurarSalario={() => setModoSalarioModal('configurar')}
+            />
           )}
 
           {/* ==================== ABA 6: METAS (PRÓXIMA FASE) ==================== */}

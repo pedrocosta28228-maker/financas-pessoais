@@ -1821,6 +1821,191 @@ body {
   flex-wrap: wrap;
 }
 
+/* ==================== ABA ESTATÍSTICAS E PROJEÇÃO (12 MESES) ==================== */
+.stats-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.stats-banner {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 12px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.88rem;
+  color: #dbeafe;
+}
+
+.focus-month-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 20px;
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.focus-label {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.focus-metrics {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+
+.focus-metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.focus-metrics span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.focus-metrics strong {
+  font-size: 0.96rem;
+}
+
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.chart-header h2 {
+  margin-bottom: 4px;
+}
+
+.svg-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.line-chart-svg {
+  width: 100%;
+  min-width: 560px;
+  height: auto;
+  display: block;
+}
+
+.svg-axis-label {
+  fill: #9ca3af;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.svg-axis-label.active {
+  fill: #f3f4f6;
+  font-weight: 700;
+}
+
+.svg-point-group {
+  cursor: pointer;
+}
+
+.inline-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.inline-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-legend i {
+  display: inline-block;
+}
+
+.columns-chart {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(40px, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+  padding-top: 8px;
+}
+
+.col-group {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.col-group:hover,
+.col-group.active {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.col-bars {
+  height: 140px;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.col-bar {
+  width: 12px;
+  border-radius: 5px 5px 2px 2px;
+  transition: height 0.3s ease;
+}
+
+.col-bar.entrada {
+  background: linear-gradient(180deg, #22c55e, #15803d);
+}
+
+.col-bar.divida {
+  background: linear-gradient(180deg, #f59e0b, #d97706);
+}
+
+.col-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.col-group.active .col-label {
+  color: var(--text);
+}
+
 @media (max-width: 900px) {
   .charts-grid {
     grid-template-columns: 1fr;
