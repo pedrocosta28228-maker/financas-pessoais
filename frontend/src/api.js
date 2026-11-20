@@ -134,4 +134,54 @@ export const api = {
     requisicao('/salario', {
       method: 'DELETE',
     }),
+
+  listarMetas: () => requisicao('/metas'),
+
+  criarMeta: (dados) =>
+    requisicao('/metas', {
+      method: 'POST',
+      body: JSON.stringify(dados),
+    }),
+
+  atualizarMeta: (id, dados) =>
+    requisicao(`/metas/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(dados),
+    }),
+
+  aportarMeta: (id, valor, operacao = 'aportar') =>
+    requisicao(`/metas/${id}/aportar`, {
+      method: 'PATCH',
+      body: JSON.stringify({ valor, operacao }),
+    }),
+
+  excluirMeta: (id) =>
+    requisicao(`/metas/${id}`, {
+      method: 'DELETE',
+    }),
+
+  listarDespesasFixas: () => requisicao('/despesas-fixas'),
+
+  criarDespesaFixa: (dados) =>
+    requisicao('/despesas-fixas', {
+      method: 'POST',
+      body: JSON.stringify(dados),
+    }),
+
+  atualizarDespesaFixa: (id, dados) =>
+    requisicao(`/despesas-fixas/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(dados),
+    }),
+
+  alternarAtivaDespesaFixa: (id, ativa) =>
+    requisicao(`/despesas-fixas/${id}/ativa`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ativa }),
+    }),
+
+  excluirDespesaFixa: (id) =>
+    requisicao(`/despesas-fixas/${id}`, {
+      method: 'DELETE',
+    }),
 };

@@ -43,17 +43,19 @@ financeiro/
 
 ## Progresso do Desenvolvimento
 - [x] Configuração do ambiente (Node.js, Git e `.gitignore`)
-- [x] Backend em Node.js + tabelas SQL no SQLite (`usuarios`, `contas`, `lancamentos`, `salario_fixo`)
+- [x] Backend em Node.js + tabelas SQL no SQLite (`usuarios`, `contas`, `lancamentos`, `salario_fixo`, `metas`, `despesas_fixas`)
 - [x] Sistema de Cadastro e Login seguro (Hash `scrypt` + JWT)
 - [x] Barra lateral recolhível com abas (*Visão Geral*, *Entradas & Carteiras*, *Dívidas e Cartões*, *Saídas*, *Estatísticas* e *Metas*)
 - [x] Carteiras com etiqueta de rendimento opcional + transferência entre contas via Transação SQL
-- [x] Dívidas parceladas agrupadas em acordeão, resumo por cartão/pessoa e pop-up de pagamento/adiantamento (do saldo ou por fora + desfazer)
+- [x] Dívidas parceladas agrupadas em acordeão, resumo por cartão/pessoa, calendário visual interativo (com status pago `✓` e pendente) e pop-up de pagamento/adiantamento (do saldo ou por fora + desfazer)
 - [x] Salário fixo recorrente com previsão automática do próximo mês
+- [x] Despesas fixas mensais na aba Saídas (lançamento em 1 clique, pausar/reativar e integração automática na projeção de 12 meses)
 - [x] Aba de Estatísticas com projeção de saldo (12 meses), queda das dívidas × salário e mês previsto de quitação
+- [x] Aba de Metas financeiras com barra de progresso, aportes/retiradas atômicas e sincronização opcional com carteiras
+- [x] Tema Claro (padrão) e Modo Escuro grafite com botão Lua/Sol no topo, tipografia *Plus Jakarta Sans* e tooltips `?`
 - [x] Testes automatizados do backend com `node --test`
 
-## Próximos Passos (Futuro)
-- [ ] **Aba de Metas financeiras:** objetivos de economia com barra de progresso
-- [ ] **Despesas fixas mensais** na aba Saídas
-- [ ] **Tema Claro / Escuro** e repaginada visual
-- [ ] **Deploy na internet** (HTTPS, rate limit, CORS restrito) e importação automática de faturas (`CSV` / `OFX`)
+## Próximos Passos (Futuro — v3)
+- [ ] **Perfil do Usuário & Central de Ajuda:** dados da conta, troca de senha, backup/exportação (`CSV` / `JSON`) e guia de uso do sistema
+- [ ] **Automação bancária:** importação de extratos/faturas (`CSV` / `OFX`) ou integração com Open Finance (ex.: Pluggy / Belvo)
+- [ ] **Versão Mobile (PWA) & Deploy na internet:** blindagem de produção (`helmet`, rate limit, CORS restrito, HTTPS) para instalar e usar direto no celular

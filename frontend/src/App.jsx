@@ -10,6 +10,19 @@ import Dashboard from './components/Dashboard.jsx';
 export default function App() {
   const [usuario, setUsuario] = useState(null);
   const [verificandoSessao, setVerificandoSessao] = useState(true);
+  const [tema, setTema] = useState(() => {
+    const salvo = localStorage.getItem('financeiro_tema');
+    return salvo === 'dark' ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', tema);
+    localStorage.setItem('financeiro_tema', tema);
+  }, [tema]);
+
+  function alternarTema() {
+    setTema((atual) => (atual === 'light' ? 'dark' : 'light'));
+  }
 
   // Ao abrir o site, confere se já existe um token válido salvo no navegador
   useEffect(() => {
@@ -49,5 +62,12 @@ export default function App() {
     return <Login onAutenticado={setUsuario} />;
   }
 
-  return <Dashboard usuario={usuario} onSair={handleSair} />;
+  return (
+    <Dashboard
+      usuario={usuario}
+      onSair={handleSair}
+      tema={tema}
+      onAlternarTema={alternarTema}
+    />
+  );
 }

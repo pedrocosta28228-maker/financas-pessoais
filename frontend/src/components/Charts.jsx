@@ -1,3 +1,5 @@
+import InfoTip from './InfoTip.jsx';
+
 function formatarMoeda(valor) {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
@@ -6,9 +8,8 @@ function formatarMoeda(valor) {
 }
 
 /**
- * Balanço visual único e limpo:
- * compara o VERDE (quanto você tem hoje) em relação ao AMARELO (ainda vai sair)
- * e ao VERMELHO (já saiu).
+ * Balanço visual único e limpo na Visão Geral:
+ * compara Disponível (verde), A pagar (amarelo) e Já pago (vermelho).
  */
 export default function Charts({ resumo, modoGeral }) {
   const tenhoHoje = Math.max(0, resumo.saldoReal);
@@ -18,22 +19,19 @@ export default function Charts({ resumo, modoGeral }) {
   const fatias = [
     {
       id: 'tenho',
-      label: 'O que você tem hoje',
-      descricao: 'Saldo disponível na mão',
+      label: 'Disponível',
       valor: tenhoHoje,
-      cor: '#22c55e',
+      cor: '#16a34a',
     },
     {
       id: 'pendente',
-      label: 'Ainda vai sair',
-      descricao: 'Dívidas e contas pendentes',
+      label: 'A pagar',
       valor: aindaVaiSair,
       cor: '#f59e0b',
     },
     {
       id: 'pagas',
-      label: 'Já saiu (Pago)',
-      descricao: 'Saídas já quitadas',
+      label: 'Já pago',
       valor: jaSaiu,
       cor: '#ef4444',
     },
@@ -49,18 +47,21 @@ export default function Charts({ resumo, modoGeral }) {
   return (
     <section className="panel balance-chart">
       <div className="balance-header">
-        <div>
-          <h2>Visão visual do seu dinheiro</h2>
-          <span className="chart-subtitle">
-            {modoGeral
-              ? 'Proporção entre o que você tem hoje (verde), o que ainda vai sair (amarelo) e o que já saiu (vermelho)'
-              : 'Proporção neste mês entre saldo disponível, a pagar e já pago'}
-          </span>
+        <div className="title-with-tip">
+          <h2>Resumo do dinheiro</h2>
+          <InfoTip
+            alinhamento="left"
+            texto={
+              modoGeral
+                ? 'Proporção entre o dinheiro disponível hoje (verde), contas/dívidas a pagar (amarelo) e o que já foi pago (vermelho).'
+                : 'Proporção neste mês entre saldo disponível, o que falta pagar e o que já foi pago.'
+            }
+          />
         </div>
       </div>
 
       <div className="balance-body">
-        {/* Esquerda: Gráfico de Rosca (Verde x Amarelo x Vermelho) */}
+        {/* Esquerda: Gráfico de Rosca */}
         <div className="donut-wrapper large">
           <svg viewBox="0 0 180 180" className="donut-svg">
             <circle
@@ -68,8 +69,8 @@ export default function Charts({ resumo, modoGeral }) {
               cy="90"
               r={raio}
               fill="none"
-              stroke="#1f2937"
-              strokeWidth="22"
+              stroke="var(--donut-track)"
+              strokeWidth="20"
             />
 
             {totalBase > 0 &&
@@ -88,7 +89,7 @@ export default function Charts({ resumo, modoGeral }) {
                     r={raio}
                     fill="none"
                     stroke={fatia.cor}
-                    strokeWidth="22"
+                    strokeWidth="20"
                     strokeDasharray={`${tamanho} ${circunferencia}`}
                     strokeDashoffset={offset}
                     transform="rotate(-90 90 90)"
@@ -99,7 +100,7 @@ export default function Charts({ resumo, modoGeral }) {
           </svg>
 
           <div className="donut-center">
-            <span className="donut-center-label">Você tem hoje</span>
+            <span className="donut-center-label">Disponível</span>
             <strong
               className={`donut-center-value ${
                 resumo.saldoReal >= 0 ? 'positive' : 'negative'
@@ -142,10 +143,7 @@ export default function Charts({ resumo, modoGeral }) {
                       className="legend-dot"
                       style={{ backgroundColor: fatia.cor }}
                     />
-                    <div>
-                      <div className="legend-label">{fatia.label}</div>
-                      <div className="legend-desc">{fatia.descricao}</div>
-                    </div>
+                    <span className="legend-label">{fatia.label}</span>
                   </div>
                   <div className="legend-right">
                     <strong>{formatarMoeda(fatia.valor)}</strong>

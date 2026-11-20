@@ -168,7 +168,7 @@ export default function NovoLancamentoModal({
         });
       }
 
-      await onSalvo(data);
+      await onSalvo(data, { tipo, ehNovo: !modoEdicao });
       onFechar();
     } catch (err) {
       setErro(err.message);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import InfoTip from './InfoTip.jsx';
 
 const CORES_CARTEIRA = [
   '#3b82f6', // Azul
@@ -145,11 +146,12 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
   return (
     <section className="panel wallets-panel">
       <div className="wallets-header">
-        <div>
-          <h2>Onde está meu dinheiro (Carteiras)</h2>
-          <span className="chart-subtitle">
-            Separe quanto está em cada banco, cofrinho ou uso diário — e mova valores entre elas sem alterar o Saldo Total
-          </span>
+        <div className="title-with-tip">
+          <h2>Onde está meu dinheiro</h2>
+          <InfoTip
+            alinhamento="left"
+            texto="Separe quanto está em cada banco, cofrinho ou uso diário. Transferir entre carteiras não altera seu saldo total."
+          />
         </div>
 
         <div className="wallets-actions">
@@ -240,7 +242,7 @@ export default function ContasSection({ contas, saldoSemConta, onAtualizar }) {
       {contas.length > 0 && Math.abs(saldoSemConta) > 0.009 && (
         <div className="unassigned-note">
           <span>
-            Ainda existem <strong>{formatarMoeda(saldoSemConta)}</strong> em lançamentos sem carteira vinculada. Você pode clicar em <strong>Editar</strong> nas entradas abaixo para escolher em qual carteira esse dinheiro está!
+            <strong>{formatarMoeda(saldoSemConta)}</strong> sem carteira vinculada — edite a entrada abaixo para associar.
           </span>
         </div>
       )}

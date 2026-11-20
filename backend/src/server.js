@@ -682,6 +682,14 @@ app.delete('/api/contas/:id', autenticar, (req, res) => {
       id,
       req.usuario.id
     );
+    db.prepare('UPDATE metas SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?').run(
+      id,
+      req.usuario.id
+    );
+    db.prepare('UPDATE despesas_fixas SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?').run(
+      id,
+      req.usuario.id
+    );
     db.prepare('DELETE FROM contas WHERE id = ? AND usuario_id = ?').run(id, req.usuario.id);
     db.exec('COMMIT');
   } catch (err) {
@@ -874,12 +882,365 @@ app.delete('/api/salario', autenticar, (req, res) => {
   return res.json({ ok: true });
 });
 
+// ============================================================================
+// ROTAS DE METAS FINANCEIRAS (Objetivos de Economia)
+// ============================================================================
+
+const SELECT_META_BASE = `
+  SELECT
+    m.id, m.titulo, m.valor_alvo, m.valor_atual, m.prazo,
+    m.cor, m.conta_id, m.observacao, m.criado_em,
+    c.nome AS conta_nome,
+    c.cor AS conta_cor
+  FROM metas m
+  LEFT JOIN contas c ON c.id = m.conta_id AND c.usuario_id = m.usuario_id
+`;
+
+// 18. Listar todas as metas do usuário logado
+app.get('/api/metas', autenticar, (req, res) => {
+  const metas = db
+    .prepare(`
+      ${SELECT_META_BASE}
+      WHERE m.usuario_id = ?
+      ORDER BY m.id DESC
+    `)
+    .all(req.usuario.id);
+
+  return res.json({ metas });
+});
+
+// 19. Criar nova meta financeira
+app.post('/api/metas', autenticar, (req, res) => {
+  const { titulo, valorAlvo, valorAtual, prazo, cor, contaId, observacao } = req.body;
+
+  const alvoNum = Number(valorAlvo);
+  const atualNum =
+    valorAtual === undefined || valorAtual === null || valorAtual === ''
+      ? 0
+      : Number(valorAtual);
+
+  if (!titulo?.trim()) {
+    return res.status(400).json({ erro: 'Informe um nome para a meta (ex.: Reserva de emergência).' });
+  }
+  if (!Number.isFinite(alvoNum) || alvoNum <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor alvo maior que zero.' });
+  }
+  if (!Number.isFinite(atualNum) || atualNum < 0) {
+    return res.status(400).json({ erro: 'O valor já guardado não pode ser negativo.' });
+  }
+
+  let prazoFinal = null;
+  if (prazo && String(prazo).trim() !== '') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(prazo).trim())) {
+      return res.status(400).json({ erro: 'Informe uma data de prazo válida (AAAA-MM-DD).' });
+    }
+    prazoFinal = String(prazo).trim();
+  }
+
+  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#22c55e';
+  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
+  const observacaoFinal = observacao?.trim() || '';
+
+  const resultado = db
+    .prepare(`
+      INSERT INTO metas (
+        usuario_id, titulo, valor_alvo, valor_atual, prazo, cor, conta_id, observacao
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      req.usuario.id,
+      titulo.trim(),
+      alvoNum,
+      contaIdFinal ? 0 : atualNum,
+      prazoFinal,
+      corFinal,
+      contaIdFinal,
+      observacaoFinal
+    );
+
+  const criada = db
+    .prepare(`${SELECT_META_BASE} WHERE m.id = ?`)
+    .get(Number(resultado.lastInsertRowid));
+
+  return res.status(201).json({ meta: criada });
+});
+
+// 20. Editar uma meta existente
+app.put('/api/metas/:id', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+  const { titulo, valorAlvo, valorAtual, prazo, cor, contaId, observacao } = req.body;
+
+  const alvoNum = Number(valorAlvo);
+  const atualNum =
+    valorAtual === undefined || valorAtual === null || valorAtual === ''
+      ? 0
+      : Number(valorAtual);
+
+  if (!titulo?.trim()) {
+    return res.status(400).json({ erro: 'Informe um nome para a meta.' });
+  }
+  if (!Number.isFinite(alvoNum) || alvoNum <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor alvo maior que zero.' });
+  }
+  if (!Number.isFinite(atualNum) || atualNum < 0) {
+    return res.status(400).json({ erro: 'O valor já guardado não pode ser negativo.' });
+  }
+
+  let prazoFinal = null;
+  if (prazo && String(prazo).trim() !== '') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(prazo).trim())) {
+      return res.status(400).json({ erro: 'Informe uma data de prazo válida (AAAA-MM-DD).' });
+    }
+    prazoFinal = String(prazo).trim();
+  }
+
+  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#22c55e';
+  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
+  const observacaoFinal = observacao?.trim() || '';
+
+  const resultado = db
+    .prepare(`
+      UPDATE metas
+      SET titulo = ?, valor_alvo = ?, valor_atual = ?, prazo = ?,
+          cor = ?, conta_id = ?, observacao = ?
+      WHERE id = ? AND usuario_id = ?
+    `)
+    .run(
+      titulo.trim(),
+      alvoNum,
+      atualNum,
+      prazoFinal,
+      corFinal,
+      contaIdFinal,
+      observacaoFinal,
+      id,
+      req.usuario.id
+    );
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Meta não encontrada.' });
+  }
+
+  const atualizada = db.prepare(`${SELECT_META_BASE} WHERE m.id = ?`).get(id);
+  return res.json({ meta: atualizada });
+});
+
+// 21. Registrar aporte ou retirada rápida em uma meta manual (atualização atômica em SQL)
+app.patch('/api/metas/:id/aportar', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+  const valor = Number(req.body.valor);
+  const operacao = req.body.operacao === 'retirar' ? 'retirar' : 'aportar';
+
+  if (!Number.isFinite(valor) || valor <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
+  }
+
+  const metaAtual = db
+    .prepare('SELECT id, conta_id FROM metas WHERE id = ? AND usuario_id = ?')
+    .get(id, req.usuario.id);
+
+  if (!metaAtual) {
+    return res.status(404).json({ erro: 'Meta não encontrada.' });
+  }
+
+  if (metaAtual.conta_id) {
+    return res.status(400).json({
+      erro: 'Esta meta acompanha uma carteira automaticamente. Faça uma transferência para essa carteira na aba Entradas.',
+    });
+  }
+
+  const delta = operacao === 'retirar' ? -valor : valor;
+
+  db.prepare(`
+    UPDATE metas
+    SET valor_atual = ROUND(MAX(0, valor_atual + ?), 2)
+    WHERE id = ? AND usuario_id = ?
+  `).run(delta, id, req.usuario.id);
+
+  const atualizada = db.prepare(`${SELECT_META_BASE} WHERE m.id = ?`).get(id);
+  return res.json({ meta: atualizada });
+});
+
+// 22. Excluir uma meta
+app.delete('/api/metas/:id', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+
+  const resultado = db
+    .prepare('DELETE FROM metas WHERE id = ? AND usuario_id = ?')
+    .run(id, req.usuario.id);
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Meta não encontrada.' });
+  }
+
+  return res.json({ ok: true });
+});
+
+// ============================================================================
+// ROTAS DE DESPESAS FIXAS MENSAIS (Recorrentes na aba Saídas e Estatísticas)
+// ============================================================================
+
+const SELECT_DESPESA_FIXA_BASE = `
+  SELECT
+    d.id, d.titulo, d.valor, d.dia_vencimento, d.categoria,
+    d.conta_id, d.ativa, d.criado_em,
+    c.nome AS conta_nome,
+    c.cor AS conta_cor
+  FROM despesas_fixas d
+  LEFT JOIN contas c ON c.id = d.conta_id AND c.usuario_id = d.usuario_id
+`;
+
+// 23. Listar despesas fixas mensais do usuário
+app.get('/api/despesas-fixas', autenticar, (req, res) => {
+  const despesas = db
+    .prepare(`
+      ${SELECT_DESPESA_FIXA_BASE}
+      WHERE d.usuario_id = ?
+      ORDER BY d.ativa DESC, d.dia_vencimento ASC, d.id ASC
+    `)
+    .all(req.usuario.id);
+
+  return res.json({ despesas });
+});
+
+// 24. Criar nova despesa fixa mensal
+app.post('/api/despesas-fixas', autenticar, (req, res) => {
+  const { titulo, valor, diaVencimento, categoria, contaId } = req.body;
+
+  const valorNum = Number(valor);
+  const diaNum = Math.floor(Number(diaVencimento));
+
+  if (!titulo?.trim()) {
+    return res.status(400).json({ erro: 'Informe o nome da despesa fixa (ex.: Internet, Academia).' });
+  }
+  if (!Number.isFinite(valorNum) || valorNum <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor mensal maior que zero.' });
+  }
+  if (!Number.isInteger(diaNum) || diaNum < 1 || diaNum > 31) {
+    return res.status(400).json({ erro: 'Informe um dia de vencimento entre 1 e 31.' });
+  }
+
+  const categoriaFinal = categoria?.trim() || 'Moradia';
+  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
+
+  const resultado = db
+    .prepare(`
+      INSERT INTO despesas_fixas (
+        usuario_id, titulo, valor, dia_vencimento, categoria, conta_id, ativa
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 1)
+    `)
+    .run(
+      req.usuario.id,
+      titulo.trim(),
+      valorNum,
+      diaNum,
+      categoriaFinal,
+      contaIdFinal
+    );
+
+  const criada = db
+    .prepare(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`)
+    .get(Number(resultado.lastInsertRowid));
+
+  return res.status(201).json({ despesa: criada });
+});
+
+// 25. Editar despesa fixa mensal
+app.put('/api/despesas-fixas/:id', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+  const { titulo, valor, diaVencimento, categoria, contaId, ativa } = req.body;
+
+  const valorNum = Number(valor);
+  const diaNum = Math.floor(Number(diaVencimento));
+
+  if (!titulo?.trim()) {
+    return res.status(400).json({ erro: 'Informe o nome da despesa fixa.' });
+  }
+  if (!Number.isFinite(valorNum) || valorNum <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor mensal maior que zero.' });
+  }
+  if (!Number.isInteger(diaNum) || diaNum < 1 || diaNum > 31) {
+    return res.status(400).json({ erro: 'Informe um dia de vencimento entre 1 e 31.' });
+  }
+
+  const categoriaFinal = categoria?.trim() || 'Moradia';
+  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
+  const ativaFinal = ativa === false || ativa === 0 ? 0 : 1;
+
+  const resultado = db
+    .prepare(`
+      UPDATE despesas_fixas
+      SET titulo = ?, valor = ?, dia_vencimento = ?, categoria = ?, conta_id = ?, ativa = ?
+      WHERE id = ? AND usuario_id = ?
+    `)
+    .run(
+      titulo.trim(),
+      valorNum,
+      diaNum,
+      categoriaFinal,
+      contaIdFinal,
+      ativaFinal,
+      id,
+      req.usuario.id
+    );
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
+  }
+
+  const atualizada = db.prepare(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`).get(id);
+  return res.json({ despesa: atualizada });
+});
+
+// 26. Pausar ou reativar uma despesa fixa mensal
+app.patch('/api/despesas-fixas/:id/ativa', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+  const ativaFinal = req.body.ativa ? 1 : 0;
+
+  const resultado = db
+    .prepare('UPDATE despesas_fixas SET ativa = ? WHERE id = ? AND usuario_id = ?')
+    .run(ativaFinal, id, req.usuario.id);
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
+  }
+
+  const atualizada = db.prepare(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`).get(id);
+  return res.json({ despesa: atualizada });
+});
+
+// 27. Excluir uma despesa fixa mensal
+app.delete('/api/despesas-fixas/:id', autenticar, (req, res) => {
+  const id = Number(req.params.id);
+
+  const resultado = db
+    .prepare('DELETE FROM despesas_fixas WHERE id = ? AND usuario_id = ?')
+    .run(id, req.usuario.id);
+
+  if (resultado.changes === 0) {
+    return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
+  }
+
+  return res.json({ ok: true });
+});
+
 // Serve o Frontend React compilado (frontend/dist) se existir, permitindo rodar tudo em 1 único servidor
 const frontendDist = path.join(__dirname, '..', '..', 'frontend', 'dist');
 if (fs.existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
+  app.use(
+    express.static(frontendDist, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-store');
+        }
+      },
+    })
+  );
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(frontendDist, 'index.html'));
   });
 }

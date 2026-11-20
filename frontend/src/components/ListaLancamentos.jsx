@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import InfoTip from './InfoTip.jsx';
 
 function formatarMoeda(valor) {
   return new Intl.NumberFormat('pt-BR', {
@@ -88,6 +89,7 @@ export function agruparLancamentos(lista) {
  */
 export default function ListaLancamentos({
   titulo,
+  infoTexto = '',
   lancamentos,
   carregando,
   mostrarFiltrosTipo = true,
@@ -201,12 +203,11 @@ export default function ListaLancamentos({
     <section className="panel entries-panel">
       <div className="entries-header">
         <div className="entries-top-row">
-          <div>
+          <div className="title-with-tip">
             <h2>{titulo}</h2>
-            <span className="chart-subtitle">
-              {recolhido
-                ? `${todosAgrupados.length} ${todosAgrupados.length === 1 ? 'item oculto' : 'itens ocultos'}`
-                : `${itensExibidos.length} ${itensExibidos.length === 1 ? 'item exibido' : 'itens exibidos'}`}
+            {infoTexto && <InfoTip texto={infoTexto} alinhamento="left" />}
+            <span className="count-chip">
+              {recolhido ? todosAgrupados.length : itensExibidos.length}
             </span>
           </div>
 

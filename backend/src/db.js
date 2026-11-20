@@ -67,6 +67,37 @@ db.exec(`
     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
     FOREIGN KEY (conta_id) REFERENCES contas(id) ON DELETE SET NULL
   );
+
+  -- Tabela 5: Metas financeiras (objetivos de economia)
+  CREATE TABLE IF NOT EXISTS metas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id INTEGER NOT NULL,
+    titulo TEXT NOT NULL,
+    valor_alvo REAL NOT NULL,
+    valor_atual REAL NOT NULL DEFAULT 0,
+    prazo TEXT DEFAULT NULL,
+    cor TEXT NOT NULL DEFAULT '#22c55e',
+    conta_id INTEGER DEFAULT NULL,
+    observacao TEXT NOT NULL DEFAULT '',
+    criado_em TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+    FOREIGN KEY (conta_id) REFERENCES contas(id) ON DELETE SET NULL
+  );
+
+  -- Tabela 6: Despesas Fixas Mensais recorrentes (ex.: Internet, Academia, Aluguel, Streaming)
+  CREATE TABLE IF NOT EXISTS despesas_fixas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id INTEGER NOT NULL,
+    titulo TEXT NOT NULL,
+    valor REAL NOT NULL,
+    dia_vencimento INTEGER NOT NULL CHECK (dia_vencimento BETWEEN 1 AND 31),
+    categoria TEXT NOT NULL DEFAULT 'Moradia',
+    conta_id INTEGER DEFAULT NULL,
+    ativa INTEGER NOT NULL DEFAULT 1,
+    criado_em TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+    FOREIGN KEY (conta_id) REFERENCES contas(id) ON DELETE SET NULL
+  );
 `);
 
 // Migrações seguras: adiciona novas colunas em bancos já existentes sem perder nenhum dado

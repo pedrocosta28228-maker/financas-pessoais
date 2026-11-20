@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { encontrarLancamentoDespesaNoMes } from './DespesasFixasSection.jsx';
+import InfoTip from './InfoTip.jsx';
 
 const NOMES_MESES_CURTOS = [
   'Jan',
@@ -29,6 +31,39 @@ const NOMES_MESES_COMPLETOS = [
   'Novembro',
   'Dezembro',
 ];
+
+const CORES_CATEGORIA = {
+  'Cartão de crédito': '#a855f7',
+  Parcelamento: '#ef4444',
+  Empréstimo: '#f97316',
+  Financiamento: '#ec4899',
+  'Boleto atrasado': '#e11d48',
+  Moradia: '#3b82f6',
+  Contas: '#06b6d4',
+  Assinaturas: '#8b5cf6',
+  Alimentação: '#f59e0b',
+  Transporte: '#14b8a6',
+  Saúde: '#10b981',
+  Educação: '#6366f1',
+  Lazer: '#d946ef',
+  Geral: '#64748b',
+  Outros: '#94a3b8',
+};
+
+const PALETA_FALLBACK = [
+  '#3b82f6',
+  '#a855f7',
+  '#ef4444',
+  '#14b8a6',
+  '#f97316',
+  '#ec4899',
+  '#6366f1',
+  '#06b6d4',
+];
+
+function corDaCategoria(nome, indice) {
+  return CORES_CATEGORIA[nome] || PALETA_FALLBACK[indice % PALETA_FALLBACK.length];
+}
 
 function formatarMoeda(valor) {
   return new Intl.NumberFormat('pt-BR', {
@@ -68,6 +103,7 @@ export default function EstatisticasView({
   lancamentosTodos,
   resumoGeral,
   salarioConfig,
+  despesasFixas = [],
   onConfigurarSalario,
 }) {
   const [mesSelecionadoIdx, setMesSelecionadoIdx] = useState(0);
@@ -110,6 +146,10 @@ export default function EstatisticasView({
       }
     }
 
+    // Despesas fixas ativas entram nos meses futuros (e no mês atual se ainda não venceu nem foi lançada)
+    const despesasFixasAtivas = despesasFixas.filter((d) => d.ativa !== 0);
+    const totalFixasMensal = despesasFixasAtivas.reduce((acc, d) => acc + d.valor, 0);
+
     // Monta a projeção para os próximos 12 meses (a partir do mês atual)
     const meses = [];
     let saldoAcumulado = resumoGeral.saldoReal;
@@ -119,7 +159,19 @@ export default function EstatisticasView({
       const m = somarMesIso(anoHoje, mesHoje, i);
       const dividasMes = dividasPorMes[m.iso] || 0;
       const outrasSaidasMes = outrasSaidasPorMes[m.iso] || 0;
-      const saidasPrevistasMes = dividasMes + outrasSaidasMes;
+
+      let fixasPrevistasMes = 0;
+      for (const df of despesasFixasAtivas) {
+        const jaLancada = Boolean(
+          encontrarLancamentoDespesaNoMes(df, m.iso, lancamentosTodos)
+        );
+        if (jaLancada) continue;
+        if (m.iso > mesAtualStr || (m.iso === mesAtualStr && diaHoje <= df.dia_vencimento)) {
+          fixasPrevistasMes += df.valor;
+        }
+      }
+
+      const saidasPrevistasMes = dividasMes + outrasSaidasMes + fixasPrevistasMes;
 
       // Salário previsto entra nos meses futuros (e no mês atual só se ainda não recebeu e ainda não passou o dia)
       let salarioPrevistoMes = 0;
@@ -148,6 +200,7 @@ export default function EstatisticasView({
         salarioPrevistoMes,
         entradasPrevistasMes,
         dividasMes,
+        fixasPrevistasMes,
         saidasPrevistasMes,
         sobraMes,
         saldoAcumulado,
@@ -181,11 +234,12 @@ export default function EstatisticasView({
     return {
       meses,
       mesQuitacao,
+      totalFixasMensal,
       saldoEm12Meses: meses[meses.length - 1]?.saldoAcumulado ?? resumoGeral.saldoReal,
       categorias,
       maxCategoria: Math.max(...categorias.map((c) => c.valor), 1),
     };
-  }, [lancamentosTodos, resumoGeral, salarioConfig]);
+  }, [lancamentosTodos, resumoGeral, salarioConfig, despesasFixas]);
 
   const mesFoco = analise.meses[mesSelecionadoIdx] || analise.meses[0];
 
@@ -240,47 +294,58 @@ export default function EstatisticasView({
       {/* Cards de resumo histórico e futuro */}
       <section className="summary-grid">
         <div className="card">
-          <span className="card-label">Total Que Já Entrou Até Hoje</span>
+          <div className="card-label-row">
+            <span className="card-label">Já entrou</span>
+            <InfoTip texto="Total histórico de todas as entradas já recebidas até hoje." />
+          </div>
           <strong className="card-value positive">
             {formatarMoeda(resumoGeral.entradasRecebidas)}
           </strong>
-          <span className="card-sub">
-            {resumoGeral.saidasPagas > 0
-              ? `Saídas pagas do saldo: ${formatarMoeda(resumoGeral.saidasPagas)}`
-              : 'Histórico acumulado de todas as entradas recebidas'}
-          </span>
+          {resumoGeral.saidasPagas > 0 && (
+            <span className="card-sub">
+              Saídas pagas: {formatarMoeda(resumoGeral.saidasPagas)}
+            </span>
+          )}
         </div>
 
         <div className="card">
-          <span className="card-label">Fim das Dívidas Atuais</span>
+          <div className="card-label-row">
+            <span className="card-label">Fim das dívidas</span>
+            <InfoTip texto="Mês de vencimento da última parcela de dívida pendente cadastrada." />
+          </div>
           <strong
-            className={`card-value ${analise.mesQuitacao ? 'warning' : 'positive'}`}
+            className={`card-value ${analise.mesQuitacao ? 'negative' : 'positive'}`}
           >
             {analise.mesQuitacao ? analise.mesQuitacao.texto : 'Sem dívidas!'}
           </strong>
-          <span className="card-sub">
-            {analise.mesQuitacao
-              ? analise.mesQuitacao.mesesRestantes === 0
-                ? 'Última parcela vence neste mês!'
+          {analise.mesQuitacao && (
+            <span className="card-sub">
+              {analise.mesQuitacao.mesesRestantes === 0
+                ? 'Última parcela vence neste mês'
                 : `Faltam ${analise.mesQuitacao.mesesRestantes} ${
                     analise.mesQuitacao.mesesRestantes === 1 ? 'mês' : 'meses'
-                  } para quitar tudo`
-              : 'Nenhuma parcela de dívida pendente'}
-          </span>
+                  }`}
+            </span>
+          )}
         </div>
 
         <div className="card">
-          <span className="card-label">Projeção em 12 Meses</span>
+          <div className="card-label-row">
+            <span className="card-label">Projeção (12 meses)</span>
+            <InfoTip texto="Saldo acumulado estimado daqui a 12 meses somando seu salário fixo e descontando dívidas e despesas fixas." />
+          </div>
           <strong
             className={`card-value ${analise.saldoEm12Meses >= 0 ? 'positive' : 'negative'}`}
           >
             {formatarMoeda(analise.saldoEm12Meses)}
           </strong>
-          <span className="card-sub">
-            {salarioConfig
-              ? `Considerando salário de ${formatarMoeda(salarioConfig.valor)}/mês − dívidas`
-              : 'Cadastre seu salário fixo para projetar seus ganhos'}
-          </span>
+          {salarioConfig && (
+            <span className="card-sub">
+              {analise.totalFixasMensal > 0
+                ? `Salário ${formatarMoeda(salarioConfig.valor)} − fixas ${formatarMoeda(analise.totalFixasMensal)}/mês`
+                : `Salário ${formatarMoeda(salarioConfig.valor)}/mês`}
+            </span>
+          )}
         </div>
       </section>
 
@@ -314,8 +379,8 @@ export default function EstatisticasView({
               </strong>
             </div>
             <div>
-              <span>Dívidas / A sair</span>
-              <strong className="warning">
+              <span>{mesFoco.fixasPrevistasMes > 0 ? 'Fixas + dívidas' : 'Dívidas / A sair'}</span>
+              <strong className="negative">
                 - {formatarMoeda(mesFoco.saidasPrevistasMes)}
               </strong>
             </div>
@@ -328,7 +393,7 @@ export default function EstatisticasView({
             </div>
             <div>
               <span>Dívida restante</span>
-              <strong className="warning">
+              <strong className="negative">
                 {formatarMoeda(mesFoco.dividaRestante)}
               </strong>
             </div>
@@ -347,11 +412,12 @@ export default function EstatisticasView({
       {/* Gráfico 1: Evolução do Saldo Acumulado x Dívida Restante (12 meses) */}
       <section className="panel chart-panel">
         <div className="chart-header">
-          <div>
-            <h2>Evolução: Seu dinheiro × Dívida restante (12 meses)</h2>
-            <span className="chart-subtitle">
-              Acompanhe seu saldo subindo enquanto o total restante de dívidas cai mês a mês
-            </span>
+          <div className="title-with-tip">
+            <h2>Saldo × Dívidas (12 meses)</h2>
+            <InfoTip
+              alinhamento="left"
+              texto="Acompanhe seu saldo acumulado subindo enquanto o total restante de dívidas cai mês a mês."
+            />
           </div>
 
           <div className="inline-legend">
@@ -360,7 +426,7 @@ export default function EstatisticasView({
               Saldo acumulado
             </span>
             <span>
-              <i className="legend-dot" style={{ backgroundColor: '#f59e0b' }} />
+              <i className="legend-dot" style={{ backgroundColor: '#ef4444' }} />
               Dívida restante
             </span>
           </div>
@@ -379,8 +445,8 @@ export default function EstatisticasView({
                 <stop offset="100%" stopColor="#22c55e" stopOpacity="0.02" />
               </linearGradient>
               <linearGradient id="dividaAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.22" />
-                <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.01" />
+                <stop offset="0%" stopColor="#ef4444" stopOpacity="0.22" />
+                <stop offset="100%" stopColor="#ef4444" stopOpacity="0.01" />
               </linearGradient>
             </defs>
 
@@ -395,7 +461,7 @@ export default function EstatisticasView({
                     y1={y}
                     x2={svgW - padX}
                     y2={y}
-                    stroke="#263244"
+                    stroke="var(--chart-grid)"
                     strokeDasharray="4 4"
                   />
                   <text x={padX - 8} y={y + 4} textAnchor="end" className="svg-axis-label">
@@ -418,12 +484,12 @@ export default function EstatisticasView({
               />
             )}
 
-            {/* Área e linha da Dívida Restante (amarelo/laranja caindo) */}
+            {/* Área e linha da Dívida Restante (vermelho caindo) */}
             <path d={pathAreaDivida} fill="url(#dividaAreaGrad)" />
             <path
               d={pathDivida}
               fill="none"
-              stroke="#f59e0b"
+              stroke="#ef4444"
               strokeWidth="2.8"
               strokeDasharray="6 4"
               strokeLinecap="round"
@@ -463,16 +529,16 @@ export default function EstatisticasView({
                     cx={p.x}
                     cy={p.yDivida}
                     r={ativo ? 6 : 3.5}
-                    fill="#f59e0b"
-                    stroke="#0b1120"
+                    fill="#ef4444"
+                    stroke="var(--chart-point-stroke)"
                     strokeWidth="2"
                   />
                   <circle
                     cx={p.x}
                     cy={p.ySaldo}
                     r={ativo ? 6.5 : 4}
-                    fill={p.saldoAcumulado >= 0 ? '#22c55e' : '#ef4444'}
-                    stroke="#0b1120"
+                    fill={p.saldoAcumulado >= 0 ? '#16a34a' : '#dc2626'}
+                    stroke="var(--chart-point-stroke)"
                     strokeWidth="2"
                   />
                   <text
@@ -493,11 +559,12 @@ export default function EstatisticasView({
       {/* Gráfico 2: Salário Previsto (Verde) x Dívidas caindo mês a mês (Amarelo) */}
       <section className="panel chart-panel">
         <div className="chart-header">
-          <div>
-            <h2>Salário previsto × Dívidas mês a mês</h2>
-            <span className="chart-subtitle">
-              Veja as dívidas diminuindo ao longo dos meses comparadas com o seu salário
-            </span>
+          <div className="title-with-tip">
+            <h2>Entradas × A pagar (por mês)</h2>
+            <InfoTip
+              alinhamento="left"
+              texto="Comparação mensal entre o valor previsto para entrar e as parcelas/contas a pagar."
+            />
           </div>
 
           <div className="inline-legend">
@@ -506,7 +573,7 @@ export default function EstatisticasView({
               Previsto entrar
             </span>
             <span>
-              <i className="legend-dot" style={{ backgroundColor: '#f59e0b' }} />
+              <i className="legend-dot" style={{ backgroundColor: '#ef4444' }} />
               Dívidas / A pagar
             </span>
           </div>
@@ -553,30 +620,59 @@ export default function EstatisticasView({
 
       {/* Ranking por Categoria */}
       <section className="panel">
-        <h2>Gastos e dívidas por categoria (total)</h2>
+        <div className="panel-header">
+          <div className="title-with-tip">
+            <h2>Por categoria</h2>
+            <InfoTip
+              alinhamento="left"
+              texto="Total acumulado de gastos e dívidas agrupados por categoria."
+            />
+          </div>
+        </div>
         {analise.categorias.length === 0 ? (
           <p className="empty-state">
             Nenhuma saída ou dívida registrada ainda.
           </p>
         ) : (
           <div className="stats-bars">
-            {analise.categorias.map((cat) => {
-              const pct = Math.max(5, (cat.valor / analise.maxCategoria) * 100);
-              return (
-                <div key={cat.categoria} className="stat-bar-row">
-                  <div className="stat-bar-top">
-                    <span>{cat.categoria}</span>
-                    <strong>{formatarMoeda(cat.valor)}</strong>
-                  </div>
-                  <div className="stat-bar-track">
-                    <div
-                      className="stat-bar-fill"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
+            {(() => {
+              const totalCategorias = analise.categorias.reduce(
+                (acc, c) => acc + c.valor,
+                0
               );
-            })}
+              return analise.categorias.map((cat, idx) => {
+                const pctBarra = Math.max(5, (cat.valor / analise.maxCategoria) * 100);
+                const pctTotal =
+                  totalCategorias > 0
+                    ? Math.round((cat.valor / totalCategorias) * 100)
+                    : 0;
+                const cor = corDaCategoria(cat.categoria, idx);
+
+                return (
+                  <div key={cat.categoria} className="stat-bar-row">
+                    <div className="stat-bar-top">
+                      <span className="stat-cat-label">
+                        <i
+                          className="legend-dot"
+                          style={{ backgroundColor: cor }}
+                        />
+                        {cat.categoria}
+                      </span>
+                      <span className="stat-cat-value">
+                        <strong>{formatarMoeda(cat.valor)}</strong>
+                        <span className="stat-cat-pct">{pctTotal}%</span>
+                      </span>
+                    </div>
+                    <div className="stat-bar-track">
+                      <div
+                        className="stat-bar-fill"
+                        style={{ width: `${pctBarra}%`, background: cor }}
+                      />
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
       </section>

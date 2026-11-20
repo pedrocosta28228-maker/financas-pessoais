@@ -3,12 +3,16 @@ import { api } from '../api.js';
 import Sidebar from './Sidebar.jsx';
 import Charts from './Charts.jsx';
 import ContasSection from './ContasSection.jsx';
+import DespesasFixasSection from './DespesasFixasSection.jsx';
+import CalendarioDividas from './CalendarioDividas.jsx';
 import EstatisticasView from './EstatisticasView.jsx';
+import MetasView from './MetasView.jsx';
 import ListaLancamentos, { agruparLancamentos } from './ListaLancamentos.jsx';
 import NovoLancamentoModal from './NovoLancamentoModal.jsx';
 import ConfirmarPagamentoModal from './ConfirmarPagamentoModal.jsx';
 import ConfirmarExclusaoModal from './ConfirmarExclusaoModal.jsx';
 import SalarioModal from './SalarioModal.jsx';
+import InfoTip from './InfoTip.jsx';
 
 const NOMES_MESES = [
   'Janeiro',
@@ -40,7 +44,7 @@ const TITULOS_SECAO = {
   },
   saidas: {
     titulo: 'Saídas',
-    subtitulo: 'Controle de gastos pagos e contas a vencer',
+    subtitulo: 'Despesas fixas mensais, gastos pagos e contas a vencer',
   },
   estatisticas: {
     titulo: 'Estatísticas e Projeção',
@@ -48,7 +52,7 @@ const TITULOS_SECAO = {
   },
   metas: {
     titulo: 'Metas',
-    subtitulo: 'Seus objetivos de economia (próxima etapa)',
+    subtitulo: 'Defina seus objetivos de economia e acompanhe cada conquista',
   },
 };
 
@@ -124,26 +128,26 @@ function calcularSalarioExibido(mesSelecionado, salarioConfig, proximoReal) {
   };
 }
 
-export default function Dashboard({ usuario, onSair }) {
-  const chaveVistas = `financeiro_dividas_vistas_${usuario.id}`;
+export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
+  const primeiroNome = (usuario.nome || '').trim().split(/\s+/)[0] || usuario.nome;
+  const chaveNovasDividas = `financeiro_dividas_novas_${usuario.id}`;
 
   const [secaoAtiva, setSecaoAtiva] = useState('visao_geral');
   const [sidebarRecolhida, setSidebarRecolhida] = useState(() => {
     return localStorage.getItem('financeiro_sidebar_recolhida') === 'true';
   });
-  const [dividasVistas, setDividasVistas] = useState(() => {
-    try {
-      const salvo = JSON.parse(localStorage.getItem(chaveVistas) || '[]');
-      return Array.isArray(salvo) ? salvo : [];
-    } catch {
-      return [];
-    }
+  const [novasDividasNaoVistas, setNovasDividasNaoVistas] = useState(() => {
+    const salvo = Number(localStorage.getItem(chaveNovasDividas) || '0');
+    return Number.isFinite(salvo) && salvo > 0 ? Math.floor(salvo) : 0;
   });
   const [mes, setMes] = useState(''); // '' = Tudo (Total Geral)
   const [lancamentos, setLancamentos] = useState([]);
   const [lancamentosTodos, setLancamentosTodos] = useState([]);
   const [contas, setContas] = useState([]);
   const [saldoSemConta, setSaldoSemConta] = useState(0);
+  const [metas, setMetas] = useState([]);
+  const [abrirNovaMetaSignal, setAbrirNovaMetaSignal] = useState(0);
+  const [despesasFixas, setDespesasFixas] = useState([]);
   const [salarioConfig, setSalarioConfig] = useState(null);
   const [proximoSalario, setProximoSalario] = useState(null);
   const [modoSalarioModal, setModoSalarioModal] = useState(null); // null | 'configurar' | 'receber'
@@ -184,13 +188,21 @@ export default function Dashboard({ usuario, onSair }) {
         api.listarLancamentos(mesSelecionado),
         api.listarContas(),
         api.obterSalario(),
+        api.listarMetas(),
+        api.listarDespesasFixas(),
       ];
       if (mesSelecionado) {
         promessas.push(api.listarLancamentos(''));
       }
 
-      const [dadosLanc, dadosContas, dadosSalario, dadosGerais] =
-        await Promise.all(promessas);
+      const [
+        dadosLanc,
+        dadosContas,
+        dadosSalario,
+        dadosMetas,
+        dadosDespesasFixas,
+        dadosGerais,
+      ] = await Promise.all(promessas);
 
       setLancamentos(dadosLanc.lancamentos);
       setResumo(dadosLanc.resumo);
@@ -200,6 +212,8 @@ export default function Dashboard({ usuario, onSair }) {
       setSaldoSemConta(dadosContas.saldoSemConta);
       setSalarioConfig(dadosSalario.salario);
       setProximoSalario(dadosSalario.proximo);
+      setMetas(dadosMetas.metas || []);
+      setDespesasFixas(dadosDespesasFixas.despesas || []);
     } catch (err) {
       setErro(err.message);
     } finally {
@@ -227,7 +241,15 @@ export default function Dashboard({ usuario, onSair }) {
     setItemEditando(null);
   }
 
-  async function handleSalvo(dataDoLancamento) {
+  async function handleSalvo(dataDoLancamento, meta = {}) {
+    if (meta.ehNovo && meta.tipo === 'divida' && secaoAtiva !== 'dividas') {
+      setNovasDividasNaoVistas((atual) => {
+        const proximo = atual + 1;
+        localStorage.setItem(chaveNovasDividas, String(proximo));
+        return proximo;
+      });
+    }
+
     const mesDoLancamento = dataDoLancamento.slice(0, 7);
     if (mes && mesDoLancamento !== mes) {
       setMes(mesDoLancamento);
@@ -279,26 +301,13 @@ export default function Dashboard({ usuario, onSair }) {
 
   // Resumos específicos para as abas
   const dividasAgrupadas = agruparLancamentos(listaDividas);
-  const chavesDividasAtuais = dividasAgrupadas.map((e) =>
-    e.tipoItem === 'unico' ? `item:${e.item.id}` : `grupo:${e.grupoId}`
-  );
 
-  // Conta apenas dívidas novas (que ainda não foram vistas na aba Dívidas)
-  const novasDividasNaoVistas = chavesDividasAtuais.filter(
-    (chave) => !dividasVistas.includes(chave)
-  ).length;
-
-  // Assim que você abre a aba Dívidas (ou já está nela), marca todas as dívidas atuais como vistas
+  // Assim que você abre a aba Dívidas, limpa a notificação de novas dívidas
   useEffect(() => {
-    if (secaoAtiva !== 'dividas' || chavesDividasAtuais.length === 0) return;
-
-    const temNova = chavesDividasAtuais.some((c) => !dividasVistas.includes(c));
-    if (!temNova) return;
-
-    const atualizadas = Array.from(new Set([...dividasVistas, ...chavesDividasAtuais]));
-    setDividasVistas(atualizadas);
-    localStorage.setItem(chaveVistas, JSON.stringify(atualizadas));
-  }, [secaoAtiva, chavesDividasAtuais.join('|')]);
+    if (secaoAtiva !== 'dividas' || novasDividasNaoVistas === 0) return;
+    setNovasDividasNaoVistas(0);
+    localStorage.setItem(chaveNovasDividas, '0');
+  }, [secaoAtiva, novasDividasNaoVistas, chaveNovasDividas]);
 
   function alternarSidebar() {
     setSidebarRecolhida((atual) => {
@@ -349,6 +358,13 @@ export default function Dashboard({ usuario, onSair }) {
       )
     : listaDividas;
 
+  const dividasCalendario = lancamentosTodos.filter(
+    (d) =>
+      d.tipo === 'divida' &&
+      (!filtroOrigemDivida ||
+        (d.origem_divida?.trim() || 'Sem cartão informado') === filtroOrigemDivida)
+  );
+
   const saidasPendentesTotal = listaSaidas
     .filter((i) => i.status === 'pendente')
     .reduce((acc, i) => acc + i.valor, 0);
@@ -357,6 +373,12 @@ export default function Dashboard({ usuario, onSair }) {
     .filter((i) => i.status === 'pago')
     .reduce((acc, i) => acc + i.valor, 0);
 
+  const despesasFixasAtivas = despesasFixas.filter((d) => d.ativa !== 0);
+  const totalDespesasFixasMensal = despesasFixasAtivas.reduce(
+    (acc, d) => acc + d.valor,
+    0
+  );
+
   const tipoBotaoTopo =
     secaoAtiva === 'dividas'
       ? 'divida'
@@ -364,14 +386,24 @@ export default function Dashboard({ usuario, onSair }) {
         ? 'saida'
         : 'entrada';
 
-  const textoBotaoTopo =
-    secaoAtiva === 'dividas'
-      ? '+ Nova dívida'
-      : secaoAtiva === 'saidas'
-        ? '+ Nova saída'
-        : secaoAtiva === 'entradas'
-          ? '+ Nova entrada'
-          : '+ Novo lançamento';
+  const labelBotaoTopo =
+    secaoAtiva === 'metas'
+      ? 'Nova meta'
+      : secaoAtiva === 'dividas'
+        ? 'Nova dívida'
+        : secaoAtiva === 'saidas'
+          ? 'Nova saída'
+          : secaoAtiva === 'entradas'
+            ? 'Nova entrada'
+            : 'Novo lançamento';
+
+  function clicarBotaoTopo() {
+    if (secaoAtiva === 'metas') {
+      setAbrirNovaMetaSignal((n) => n + 1);
+      return;
+    }
+    abrirNovo(tipoBotaoTopo);
+  }
 
   return (
     <div className="app-shell">
@@ -388,18 +420,65 @@ export default function Dashboard({ usuario, onSair }) {
       <div className="main-area">
         {/* Cabeçalho da aba atual */}
         <header className="page-header">
-          <div>
-            <h2>{infoSecao.titulo}</h2>
-            <p className="page-subtitle">{infoSecao.subtitulo}</p>
+          <div className="title-with-tip">
+            <h2>
+              {secaoAtiva === 'visao_geral'
+                ? `Olá, ${primeiroNome}!`
+                : infoSecao.titulo}
+            </h2>
+            {secaoAtiva !== 'visao_geral' && (
+              <InfoTip texto={infoSecao.subtitulo} alinhamento="left" />
+            )}
           </div>
 
-          <button
-            type="button"
-            className="btn-add"
-            onClick={() => abrirNovo(tipoBotaoTopo)}
-          >
-            {textoBotaoTopo}
-          </button>
+          <div className="page-header-actions">
+            <button
+              type="button"
+              className="btn-header-salary"
+              onClick={() => setModoSalarioModal('configurar')}
+            >
+              {salarioConfig ? 'Editar salário' : 'Registrar salário'}
+            </button>
+
+            <button
+              type="button"
+              className="btn-add-icon"
+              onClick={clicarBotaoTopo}
+              title={labelBotaoTopo}
+              aria-label={labelBotaoTopo}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
+              </svg>
+            </button>
+
+            <button
+              type="button"
+              className="btn-theme-icon"
+              onClick={onAlternarTema}
+              title={tema === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+              aria-label={tema === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+            >
+              {tema === 'dark' ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2" />
+                  <path d="M12 20v2" />
+                  <path d="m4.93 4.93 1.41 1.41" />
+                  <path d="m17.66 17.66 1.41 1.41" />
+                  <path d="M2 12h2" />
+                  <path d="M20 12h2" />
+                  <path d="m6.34 17.66-1.41 1.41" />
+                  <path d="m19.07 4.93-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+                </svg>
+              )}
+            </button>
+          </div>
         </header>
 
         <main className="main-content">
@@ -414,14 +493,14 @@ export default function Dashboard({ usuario, onSair }) {
                   className={modoGeral ? 'seg-btn active' : 'seg-btn'}
                   onClick={() => setMes('')}
                 >
-                  Tudo (Total Geral)
+                  Geral
                 </button>
                 <button
                   type="button"
                   className={!modoGeral ? 'seg-btn active' : 'seg-btn'}
                   onClick={() => setMes(mes || mesAtualIso())}
                 >
-                  Por Mês
+                  Por mês
                 </button>
               </div>
 
@@ -461,62 +540,148 @@ export default function Dashboard({ usuario, onSair }) {
           {/* ==================== ABA 1: VISÃO GERAL ==================== */}
           {secaoAtiva === 'visao_geral' && (
             <>
-              <section className="summary-grid">
+              <section className="summary-grid cols-4">
+                {!modoGeral && (
+                  <div className="card card-saldo-total">
+                    <div className="card-label-row">
+                      <span className="card-label">Saldo total</span>
+                      <InfoTip texto="Quanto você tem disponível hoje no total (somando todos os meses)." />
+                    </div>
+                    <strong
+                      className={`card-value ${resumoGeral.saldoReal >= 0 ? 'positive' : 'negative'}`}
+                    >
+                      {formatarMoeda(resumoGeral.saldoReal)}
+                    </strong>
+                  </div>
+                )}
+
                 <div className="card card-saldo">
-                  <span className="card-label">
-                    {modoGeral ? 'Saldo Total (Quanto Tenho)' : 'Saldo do Mês'}
-                  </span>
+                  <div className="card-label-row">
+                    <span className="card-label">
+                      {modoGeral ? 'Saldo disponível' : 'Saldo do mês'}
+                    </span>
+                    <InfoTip
+                      texto={
+                        modoGeral
+                          ? 'Quanto você tem disponível hoje: tudo que entrou menos as saídas pagas do saldo.'
+                          : 'Diferença entre o que entrou e as saídas pagas neste mês.'
+                      }
+                    />
+                  </div>
                   <strong
                     className={`card-value ${resumo.saldoReal >= 0 ? 'positive' : 'negative'}`}
                   >
                     {formatarMoeda(resumo.saldoReal)}
                   </strong>
-                  <span className="card-sub">
-                    {resumo.entradasPrevistas > 0
-                      ? `+ ${formatarMoeda(resumo.entradasPrevistas)} previsto para entrar`
-                      : proximoSalario && modoGeral
-                        ? `Próximo: ${proximoSalario.titulo} (${formatarMoeda(proximoSalario.valor)} em ${formatarData(proximoSalario.dataIso)})`
-                        : modoGeral
-                          ? 'Atualiza automaticamente ao pagar ou adiantar'
-                          : 'Entradas menos saídas pagas neste mês'}
-                  </span>
                 </div>
 
+                {modoGeral && (
+                  <div className="card card-salario">
+                    <div className="card-label-row">
+                      <span className="card-label">Previsto para entrar</span>
+                      <InfoTip texto="Soma do próximo salário fixo com eventuais entradas pendentes." />
+                    </div>
+                    <strong className="card-value info">
+                      {formatarMoeda(
+                        resumo.entradasPrevistas +
+                          (salarioExibido ? salarioExibido.valor : 0)
+                      )}
+                    </strong>
+                    {salarioExibido ? (
+                      <>
+                        <span className="card-sub">
+                          <strong>{salarioExibido.titulo}</strong> •{' '}
+                          {formatarData(salarioExibido.dataIso).slice(0, 5)}
+                          {resumo.entradasPrevistas > 0
+                            ? ` + ${formatarMoeda(resumo.entradasPrevistas)}`
+                            : ''}
+                        </span>
+                        <div className="salary-card-actions">
+                          <button
+                            type="button"
+                            className="btn-pay"
+                            onClick={() => setModoSalarioModal('receber')}
+                          >
+                            Receber salário
+                          </button>
+                        </div>
+                      </>
+                    ) : resumo.entradasPrevistas > 0 ? (
+                      <span className="card-sub">Entradas pendentes</span>
+                    ) : (
+                      <div className="salary-card-actions">
+                        <button
+                          type="button"
+                          className="btn-small"
+                          onClick={() => setModoSalarioModal('configurar')}
+                        >
+                          + Salário fixo
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="card card-saida">
-                  <span className="card-label">
-                    {modoGeral ? 'Saídas Pagas (Total)' : 'Saídas Pagas do Mês'}
-                  </span>
+                  <div className="card-label-row">
+                    <span className="card-label">Saídas pagas</span>
+                    <InfoTip
+                      texto={
+                        modoGeral
+                          ? 'Total de gastos e parcelas que já saíram do seu saldo.'
+                          : 'Gastos e parcelas já pagos neste mês.'
+                      }
+                    />
+                  </div>
                   <strong className="card-value negative">
                     {formatarMoeda(resumo.saidasPagas)}
                   </strong>
-                  <span className="card-sub">O que já saiu do seu saldo</span>
                 </div>
 
                 <div className="card card-pendente">
-                  <span className="card-label">Ainda Vai Sair (A Pagar)</span>
+                  <div className="card-label-row">
+                    <span className="card-label">A pagar</span>
+                    <InfoTip
+                      texto={
+                        modoGeral
+                          ? 'Contas e parcelas pendentes que ainda vão sair do seu saldo.'
+                          : 'Contas e parcelas pendentes neste mês.'
+                      }
+                    />
+                  </div>
                   <strong className="card-value warning">
                     {formatarMoeda(resumo.saidasAPagar)}
                   </strong>
-                  <span className="card-sub">
-                    Dívidas pendentes: {formatarMoeda(resumo.dividasPendentes)}
-                  </span>
+                  {resumo.dividasPendentes > 0 && (
+                    <span className="card-sub">
+                      Dívidas: {formatarMoeda(resumo.dividasPendentes)}
+                    </span>
+                  )}
                 </div>
               </section>
 
               <Charts resumo={resumo} modoGeral={modoGeral} />
 
+              <CalendarioDividas
+                modo="geral"
+                dividasTodas={lancamentosTodos}
+                mesExterno={mes}
+                onAlternarStatus={alternarStatus}
+              />
+
               <ListaLancamentos
                 titulo={
                   modoGeral
-                    ? 'Todos os lançamentos'
+                    ? 'Lançamentos'
                     : `Lançamentos — ${formatarMesBonito(mes)}`
                 }
+                infoTexto="Suas entradas, saídas e dívidas. Use os filtros, a busca ou a setinha ao lado para recolher."
                 lancamentos={lancamentos}
                 carregando={carregando}
                 mostrarFiltrosTipo={true}
                 recolhivel={true}
                 chaveRecolher={`financeiro_home_recolhido_${usuario.id}`}
-                textoBotaoVazio="+ Adicionar primeiro lançamento"
+                textoBotaoVazio="+ Adicionar lançamento"
                 onAdicionar={() => abrirNovo('entrada')}
                 onAlternarStatus={alternarStatus}
                 onEditar={abrirEdicao}
@@ -539,18 +704,23 @@ export default function Dashboard({ usuario, onSair }) {
 
               <section className="summary-grid">
                 <div className="card">
-                  <span className="card-label">
-                    {modoGeral ? 'Entradas Recebidas (Total)' : 'Recebido no Mês'}
-                  </span>
+                  <div className="card-label-row">
+                    <span className="card-label">
+                      {modoGeral ? 'Recebido' : 'Recebido no mês'}
+                    </span>
+                    <InfoTip texto="Total de entradas já recebidas neste período." />
+                  </div>
                   <strong className="card-value positive">
                     {formatarMoeda(resumo.entradasRecebidas)}
                   </strong>
-                  <span className="card-sub">Tudo que já entrou nas suas contas</span>
                 </div>
 
                 <div className="card card-salario">
                   <div className="card-top-row">
-                    <span className="card-label">Previsto para Entrar</span>
+                    <div className="card-label-row">
+                      <span className="card-label">Previsto para entrar</span>
+                      <InfoTip texto="Soma do próximo salário fixo com eventuais entradas pendentes." />
+                    </div>
                     {salarioConfig && (
                       <button
                         type="button"
@@ -562,7 +732,7 @@ export default function Dashboard({ usuario, onSair }) {
                     )}
                   </div>
 
-                  <strong className="card-value warning">
+                  <strong className="card-value info">
                     {formatarMoeda(
                       resumo.entradasPrevistas +
                         (salarioExibido ? salarioExibido.valor : 0)
@@ -572,13 +742,13 @@ export default function Dashboard({ usuario, onSair }) {
                   {salarioExibido ? (
                     <>
                       <span className="card-sub">
-                        <strong>{salarioExibido.titulo}</strong> • dia{' '}
-                        {formatarData(salarioExibido.dataIso)}
+                        <strong>{salarioExibido.titulo}</strong> •{' '}
+                        {formatarData(salarioExibido.dataIso).slice(0, 5)}
                         {salarioExibido.contaNome
                           ? ` (${salarioExibido.contaNome})`
                           : ''}
                         {resumo.entradasPrevistas > 0
-                          ? ` + ${formatarMoeda(resumo.entradasPrevistas)} avulso`
+                          ? ` + ${formatarMoeda(resumo.entradasPrevistas)}`
                           : ''}
                       </span>
                       <div className="salary-card-actions">
@@ -592,38 +762,35 @@ export default function Dashboard({ usuario, onSair }) {
                       </div>
                     </>
                   ) : (
-                    <>
-                      <span className="card-sub">
-                        Cadastre seu salário fixo para prever automaticamente o próximo mês
-                      </span>
-                      <div className="salary-card-actions">
-                        <button
-                          type="button"
-                          className="btn-small-primary"
-                          onClick={() => setModoSalarioModal('configurar')}
-                        >
-                          + Adicionar salário
-                        </button>
-                      </div>
-                    </>
+                    <div className="salary-card-actions">
+                      <button
+                        type="button"
+                        className="btn-small-primary"
+                        onClick={() => setModoSalarioModal('configurar')}
+                      >
+                        + Adicionar salário
+                      </button>
+                    </div>
                   )}
                 </div>
 
                 <div className="card">
-                  <span className="card-label">Saldo Disponível Hoje</span>
+                  <div className="card-label-row">
+                    <span className="card-label">Saldo disponível</span>
+                    <InfoTip texto="Quanto resta após descontar as saídas pagas do saldo." />
+                  </div>
                   <strong
                     className={`card-value ${resumo.saldoReal >= 0 ? 'positive' : 'negative'}`}
                   >
                     {formatarMoeda(resumo.saldoReal)}
                   </strong>
-                  <span className="card-sub">Após descontar saídas pagas do saldo</span>
                 </div>
               </section>
 
               <ListaLancamentos
                 titulo={
                   modoGeral
-                    ? 'Todas as entradas'
+                    ? 'Entradas'
                     : `Entradas — ${formatarMesBonito(mes)}`
                 }
                 lancamentos={listaEntradas}
@@ -644,48 +811,66 @@ export default function Dashboard({ usuario, onSair }) {
             <>
               <section className="summary-grid">
                 <div className="card">
-                  <span className="card-label">Total em Dívidas Pendentes</span>
+                  <div className="card-label-row">
+                    <span className="card-label">Pendente</span>
+                    <InfoTip texto="Total de parcelas de dívidas ainda não pagas." />
+                  </div>
                   <strong className="card-value warning">
                     {formatarMoeda(resumo.dividasPendentes)}
                   </strong>
-                  <span className="card-sub">
-                    {gruposDividasPendentes}{' '}
-                    {gruposDividasPendentes === 1 ? 'dívida ativa' : 'dívidas ativas'}
-                  </span>
+                  {gruposDividasPendentes > 0 && (
+                    <span className="card-sub">
+                      {gruposDividasPendentes}{' '}
+                      {gruposDividasPendentes === 1 ? 'dívida ativa' : 'dívidas ativas'}
+                    </span>
+                  )}
                 </div>
 
                 <div className="card">
-                  <span className="card-label">Dívidas Já Pagas</span>
+                  <div className="card-label-row">
+                    <span className="card-label">Já pago</span>
+                    <InfoTip texto="Total de parcelas de dívidas já quitadas neste período." />
+                  </div>
                   <strong className="card-value positive">
                     {formatarMoeda(dividasPagasTotal)}
                   </strong>
-                  <span className="card-sub">Parcelas quitadas neste período</span>
                 </div>
 
                 <div className="card">
-                  <span className="card-label">Próximo Vencimento</span>
+                  <div className="card-label-row">
+                    <span className="card-label">Próximo vencimento</span>
+                    <InfoTip texto="Data e valor da próxima parcela pendente." />
+                  </div>
                   <strong className="card-value">
                     {proximaDividaPendente
                       ? formatarData(proximaDividaPendente.data)
                       : 'Tudo em dia!'}
                   </strong>
-                  <span className="card-sub">
-                    {proximaDividaPendente
-                      ? `${proximaDividaPendente.titulo} (${formatarMoeda(proximaDividaPendente.valor)})`
-                      : 'Nenhuma parcela pendente'}
-                  </span>
+                  {proximaDividaPendente && (
+                    <span className="card-sub">
+                      {proximaDividaPendente.titulo} ({formatarMoeda(proximaDividaPendente.valor)})
+                    </span>
+                  )}
                 </div>
               </section>
+
+              {/* Calendário visual de vencimentos de dívidas */}
+              <CalendarioDividas
+                dividasTodas={dividasCalendario}
+                mesExterno={mes}
+                onAlternarStatus={alternarStatus}
+              />
 
               {/* Resumo por Cartão / Pessoa (quando houver dívidas com origem cadastrada) */}
               {temOrigemInformada && (
                 <section className="panel origins-panel">
                   <div className="origins-header">
-                    <div>
-                      <h2>Quanto devo por cartão / pessoa</h2>
-                      <span className="chart-subtitle">
-                        Clique em um cartão para filtrar apenas as dívidas dele
-                      </span>
+                    <div className="title-with-tip">
+                      <h2>Por cartão / pessoa</h2>
+                      <InfoTip
+                        alinhamento="left"
+                        texto="Clique em um cartão ou pessoa para filtrar somente as dívidas dele."
+                      />
                     </div>
                     {filtroOrigemDivida && (
                       <button
@@ -693,7 +878,7 @@ export default function Dashboard({ usuario, onSair }) {
                         className="btn-small"
                         onClick={() => setFiltroOrigemDivida('')}
                       >
-                        Mostrar todos os cartões
+                        Mostrar todos
                       </button>
                     )}
                   </div>
@@ -717,8 +902,8 @@ export default function Dashboard({ usuario, onSair }) {
                           <span className="origin-card-sub">
                             {orig.qtdPendentes}{' '}
                             {orig.qtdPendentes === 1
-                              ? 'parcela pendente'
-                              : 'parcelas pendentes'}
+                              ? 'parcela'
+                              : 'parcelas'}
                           </span>
                         </button>
                       );
@@ -732,7 +917,7 @@ export default function Dashboard({ usuario, onSair }) {
                   filtroOrigemDivida
                     ? `Dívidas — ${filtroOrigemDivida}`
                     : modoGeral
-                      ? 'Todas as dívidas'
+                      ? 'Dívidas'
                       : `Dívidas — ${formatarMesBonito(mes)}`
                 }
                 lancamentos={listaDividasFiltradaPorOrigem}
@@ -753,26 +938,54 @@ export default function Dashboard({ usuario, onSair }) {
             <>
               <section className="summary-grid">
                 <div className="card">
-                  <span className="card-label">Saídas Pagas</span>
-                  <strong className="card-value negative">
-                    {formatarMoeda(saidasPagasApenas)}
+                  <div className="card-label-row">
+                    <span className="card-label">Fixas / mês</span>
+                    <InfoTip texto="Soma das suas despesas fixas mensais ativas." />
+                  </div>
+                  <strong className="card-value warning">
+                    {formatarMoeda(totalDespesasFixasMensal)}
                   </strong>
-                  <span className="card-sub">Gastos comuns já pagos</span>
+                  {despesasFixasAtivas.length > 0 && (
+                    <span className="card-sub">
+                      {despesasFixasAtivas.length}{' '}
+                      {despesasFixasAtivas.length === 1 ? 'conta ativa' : 'contas ativas'}
+                    </span>
+                  )}
                 </div>
 
                 <div className="card">
-                  <span className="card-label">Saídas Pendentes</span>
+                  <div className="card-label-row">
+                    <span className="card-label">Pagas</span>
+                    <InfoTip texto="Gastos comuns já pagos neste período." />
+                  </div>
+                  <strong className="card-value negative">
+                    {formatarMoeda(saidasPagasApenas)}
+                  </strong>
+                </div>
+
+                <div className="card">
+                  <div className="card-label-row">
+                    <span className="card-label">Pendentes</span>
+                    <InfoTip texto="Contas comuns que ainda faltam pagar." />
+                  </div>
                   <strong className="card-value warning">
                     {formatarMoeda(saidasPendentesTotal)}
                   </strong>
-                  <span className="card-sub">Contas comuns ainda a pagar</span>
                 </div>
               </section>
+
+              <DespesasFixasSection
+                despesasFixas={despesasFixas}
+                contas={contas}
+                lancamentosTodos={lancamentosTodos}
+                mesSelecionado={mes}
+                onAtualizar={() => carregarDados(mes)}
+              />
 
               <ListaLancamentos
                 titulo={
                   modoGeral
-                    ? 'Todas as saídas'
+                    ? 'Saídas'
                     : `Saídas — ${formatarMesBonito(mes)}`
                 }
                 lancamentos={listaSaidas}
@@ -794,18 +1007,20 @@ export default function Dashboard({ usuario, onSair }) {
               lancamentosTodos={lancamentosTodos}
               resumoGeral={resumoGeral}
               salarioConfig={salarioConfig}
+              despesasFixas={despesasFixas}
               onConfigurarSalario={() => setModoSalarioModal('configurar')}
             />
           )}
 
-          {/* ==================== ABA 6: METAS (PRÓXIMA FASE) ==================== */}
+          {/* ==================== ABA 6: METAS FINANCEIRAS ==================== */}
           {secaoAtiva === 'metas' && (
-            <section className="panel placeholder-panel">
-              <h2>Metas financeiras</h2>
-              <p className="empty-state">
-                Esta aba será construída na <strong>Fase 5</strong> do nosso plano — aqui você vai criar seus objetivos de economia (ex.: reserva de emergência, celular, viagem) e acompanhar o progresso com o seu saldo atual ({formatarMoeda(resumo.saldoReal)}).
-              </p>
-            </section>
+            <MetasView
+              metas={metas}
+              contas={contas}
+              saldoReal={resumoGeral.saldoReal}
+              abrirNovaSignal={abrirNovaMetaSignal}
+              onAtualizar={() => carregarDados(mes)}
+            />
           )}
         </main>
       </div>
