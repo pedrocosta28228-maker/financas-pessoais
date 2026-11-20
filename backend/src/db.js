@@ -55,6 +55,17 @@ db.exec(`
     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
     FOREIGN KEY (conta_id) REFERENCES contas(id) ON DELETE SET NULL
   );
+
+  -- Tabela 4: Configuração de Salário Fixo recorrente (1 por usuário)
+  CREATE TABLE IF NOT EXISTS salario_fixo (
+    usuario_id INTEGER PRIMARY KEY,
+    valor REAL NOT NULL,
+    dia_pagamento INTEGER NOT NULL CHECK (dia_pagamento BETWEEN 1 AND 31),
+    conta_id INTEGER DEFAULT NULL,
+    atualizado_em TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+    FOREIGN KEY (conta_id) REFERENCES contas(id) ON DELETE SET NULL
+  );
 `);
 
 // Migrações seguras: adiciona novas colunas em bancos já existentes sem perder nenhum dado

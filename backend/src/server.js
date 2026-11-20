@@ -689,6 +689,188 @@ app.delete('/api/contas/:id', autenticar, (req, res) => {
   return res.json({ ok: true });
 });
 
+// ============================================================================
+// ROTAS DE SALÁRIO FIXO RECORRENTE ("Previsto para Entrar")
+// ============================================================================
+
+const NOMES_MESES_PT = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
+];
+
+function montarDataNoMes(ano, mes1a12, diaDesejado) {
+  const ultimoDia = new Date(ano, mes1a12, 0).getDate();
+  const diaFinal = Math.min(diaDesejado, ultimoDia);
+  return `${ano}-${String(mes1a12).padStart(2, '0')}-${String(diaFinal).padStart(2, '0')}`;
+}
+
+/**
+ * Calcula automaticamente o próximo salário previsto:
+ * se o dia de pagamento deste mês já passou OU já existe um salário recebido neste mês,
+ * aponta para o próximo mês (ex.: em novembro -> "Salário de Dezembro").
+ */
+function calcularProximoSalario(config, usuarioId) {
+  if (!config) return null;
+
+  const hoje = new Date();
+  let ano = hoje.getFullYear();
+  let mes = hoje.getMonth() + 1; // 1..12
+  const diaHoje = hoje.getDate();
+
+  const mesAtualRef = `${ano}-${String(mes).padStart(2, '0')}`;
+  const jaRecebeuMesAtual = Boolean(
+    db
+      .prepare(`
+        SELECT id FROM lancamentos
+        WHERE usuario_id = ?
+          AND tipo = 'entrada'
+          AND status = 'pago'
+          AND categoria = 'Salário'
+          AND substr(data, 1, 7) = ?
+        LIMIT 1
+      `)
+      .get(usuarioId, mesAtualRef)
+  );
+
+  if (diaHoje > config.dia_pagamento || jaRecebeuMesAtual) {
+    mes += 1;
+    if (mes > 12) {
+      mes = 1;
+      ano += 1;
+    }
+  }
+
+  // Se o usuário já adiantou/registrou até o mês seguinte, pula mais um mês
+  let tentativas = 0;
+  while (tentativas < 12) {
+    const mesRef = `${ano}-${String(mes).padStart(2, '0')}`;
+    const jaRecebeu = Boolean(
+      db
+        .prepare(`
+          SELECT id FROM lancamentos
+          WHERE usuario_id = ?
+            AND tipo = 'entrada'
+            AND status = 'pago'
+            AND categoria = 'Salário'
+            AND substr(data, 1, 7) = ?
+          LIMIT 1
+        `)
+        .get(usuarioId, mesRef)
+    );
+    if (!jaRecebeu) break;
+    mes += 1;
+    if (mes > 12) {
+      mes = 1;
+      ano += 1;
+    }
+    tentativas += 1;
+  }
+
+  const mesRef = `${ano}-${String(mes).padStart(2, '0')}`;
+  const mesNome = NOMES_MESES_PT[mes - 1];
+  const dataIso = montarDataNoMes(ano, mes, config.dia_pagamento);
+
+  return {
+    titulo: `Salário de ${mesNome}`,
+    mesNome,
+    ano,
+    mesRef,
+    dataIso,
+    valor: config.valor,
+    diaPagamento: config.dia_pagamento,
+    contaId: config.conta_id || null,
+    contaNome: config.conta_nome || null,
+  };
+}
+
+// 15. Obter salário fixo configurado e o próximo mês previsto
+app.get('/api/salario', autenticar, (req, res) => {
+  const config = db
+    .prepare(`
+      SELECT s.valor, s.dia_pagamento, s.conta_id, c.nome AS conta_nome
+      FROM salario_fixo s
+      LEFT JOIN contas c ON c.id = s.conta_id AND c.usuario_id = s.usuario_id
+      WHERE s.usuario_id = ?
+    `)
+    .get(req.usuario.id);
+
+  if (!config) {
+    return res.json({ salario: null, proximo: null });
+  }
+
+  const proximo = calcularProximoSalario(config, req.usuario.id);
+  return res.json({
+    salario: {
+      valor: config.valor,
+      diaPagamento: config.dia_pagamento,
+      contaId: config.conta_id || null,
+      contaNome: config.conta_nome || null,
+    },
+    proximo,
+  });
+});
+
+// 16. Criar ou atualizar salário fixo (UPSERT em SQL)
+app.put('/api/salario', autenticar, (req, res) => {
+  const valor = Number(req.body.valor);
+  const diaPagamento = Math.floor(Number(req.body.diaPagamento));
+  const contaIdFinal = resolverContaId(req.body.contaId, req.usuario.id);
+
+  if (!Number.isFinite(valor) || valor <= 0) {
+    return res.status(400).json({ erro: 'Informe um valor de salário maior que zero.' });
+  }
+  if (!Number.isInteger(diaPagamento) || diaPagamento < 1 || diaPagamento > 31) {
+    return res.status(400).json({ erro: 'Informe um dia de pagamento entre 1 e 31.' });
+  }
+
+  db.prepare(`
+    INSERT INTO salario_fixo (usuario_id, valor, dia_pagamento, conta_id, atualizado_em)
+    VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+    ON CONFLICT(usuario_id) DO UPDATE SET
+      valor = excluded.valor,
+      dia_pagamento = excluded.dia_pagamento,
+      conta_id = excluded.conta_id,
+      atualizado_em = datetime('now', 'localtime')
+  `).run(req.usuario.id, valor, diaPagamento, contaIdFinal);
+
+  const config = db
+    .prepare(`
+      SELECT s.valor, s.dia_pagamento, s.conta_id, c.nome AS conta_nome
+      FROM salario_fixo s
+      LEFT JOIN contas c ON c.id = s.conta_id AND c.usuario_id = s.usuario_id
+      WHERE s.usuario_id = ?
+    `)
+    .get(req.usuario.id);
+
+  const proximo = calcularProximoSalario(config, req.usuario.id);
+
+  return res.json({
+    salario: {
+      valor: config.valor,
+      diaPagamento: config.dia_pagamento,
+      contaId: config.conta_id || null,
+      contaNome: config.conta_nome || null,
+    },
+    proximo,
+  });
+});
+
+// 17. Remover salário fixo
+app.delete('/api/salario', autenticar, (req, res) => {
+  db.prepare('DELETE FROM salario_fixo WHERE usuario_id = ?').run(req.usuario.id);
+  return res.json({ ok: true });
+});
+
 // Serve o Frontend React compilado (frontend/dist) se existir, permitindo rodar tudo em 1 único servidor
 const frontendDist = path.join(__dirname, '..', '..', 'frontend', 'dist');
 if (fs.existsSync(frontendDist)) {

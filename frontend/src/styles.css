@@ -1778,6 +1778,36 @@ body {
   color: var(--muted);
 }
 
+/* ==================== CARD SALÁRIO FIXO ("PREVISTO PARA ENTRAR") ==================== */
+.card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.salary-card-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.day-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.day-presets {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 900px) {
   .charts-grid {
     grid-template-columns: 1fr;

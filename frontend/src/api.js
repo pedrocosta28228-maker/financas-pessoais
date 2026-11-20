@@ -121,4 +121,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ origemId, destinoId, valor }),
     }),
+
+  obterSalario: () => requisicao('/salario'),
+
+  salvarSalario: (dados) =>
+    requisicao('/salario', {
+      method: 'PUT',
+      body: JSON.stringify(dados),
+    }),
+
+  removerSalario: () =>
+    requisicao('/salario', {
+      method: 'DELETE',
+    }),
 };

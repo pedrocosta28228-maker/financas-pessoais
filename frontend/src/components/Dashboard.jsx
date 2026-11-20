@@ -7,6 +7,7 @@ import ListaLancamentos, { agruparLancamentos } from './ListaLancamentos.jsx';
 import NovoLancamentoModal from './NovoLancamentoModal.jsx';
 import ConfirmarPagamentoModal from './ConfirmarPagamentoModal.jsx';
 import ConfirmarExclusaoModal from './ConfirmarExclusaoModal.jsx';
+import SalarioModal from './SalarioModal.jsx';
 
 const NOMES_MESES = [
   'Janeiro',
@@ -103,6 +104,9 @@ export default function Dashboard({ usuario, onSair }) {
   const [lancamentos, setLancamentos] = useState([]);
   const [contas, setContas] = useState([]);
   const [saldoSemConta, setSaldoSemConta] = useState(0);
+  const [salarioConfig, setSalarioConfig] = useState(null);
+  const [proximoSalario, setProximoSalario] = useState(null);
+  const [modoSalarioModal, setModoSalarioModal] = useState(null); // null | 'configurar' | 'receber'
   const [filtroOrigemDivida, setFiltroOrigemDivida] = useState('');
   const [resumo, setResumo] = useState({
     entradasRecebidas: 0,
@@ -126,14 +130,17 @@ export default function Dashboard({ usuario, onSair }) {
     setCarregando(true);
     setErro('');
     try {
-      const [dadosLanc, dadosContas] = await Promise.all([
+      const [dadosLanc, dadosContas, dadosSalario] = await Promise.all([
         api.listarLancamentos(mesSelecionado),
         api.listarContas(),
+        api.obterSalario(),
       ]);
       setLancamentos(dadosLanc.lancamentos);
       setResumo(dadosLanc.resumo);
       setContas(dadosContas.contas);
       setSaldoSemConta(dadosContas.saldoSemConta);
+      setSalarioConfig(dadosSalario.salario);
+      setProximoSalario(dadosSalario.proximo);
     } catch (err) {
       setErro(err.message);
     } finally {
@@ -420,9 +427,11 @@ export default function Dashboard({ usuario, onSair }) {
                   <span className="card-sub">
                     {resumo.entradasPrevistas > 0
                       ? `+ ${formatarMoeda(resumo.entradasPrevistas)} previsto para entrar`
-                      : modoGeral
-                        ? 'Atualiza automaticamente ao pagar ou adiantar'
-                        : 'Entradas menos saídas pagas neste mês'}
+                      : proximoSalario && modoGeral
+                        ? `Próximo: ${proximoSalario.titulo} (${formatarMoeda(proximoSalario.valor)} em ${formatarData(proximoSalario.dataIso)})`
+                        : modoGeral
+                          ? 'Atualiza automaticamente ao pagar ou adiantar'
+                          : 'Entradas menos saídas pagas neste mês'}
                   </span>
                 </div>
 
@@ -490,12 +499,65 @@ export default function Dashboard({ usuario, onSair }) {
                   <span className="card-sub">Tudo que já entrou nas suas contas</span>
                 </div>
 
-                <div className="card">
-                  <span className="card-label">Previsto para Entrar</span>
+                <div className="card card-salario">
+                  <div className="card-top-row">
+                    <span className="card-label">Previsto para Entrar</span>
+                    {salarioConfig && (
+                      <button
+                        type="button"
+                        className="btn-link"
+                        onClick={() => setModoSalarioModal('configurar')}
+                      >
+                        Editar salário
+                      </button>
+                    )}
+                  </div>
+
                   <strong className="card-value warning">
-                    {formatarMoeda(resumo.entradasPrevistas)}
+                    {formatarMoeda(
+                      resumo.entradasPrevistas +
+                        (proximoSalario ? proximoSalario.valor : 0)
+                    )}
                   </strong>
-                  <span className="card-sub">Entradas ainda marcadas como pendentes</span>
+
+                  {proximoSalario ? (
+                    <>
+                      <span className="card-sub">
+                        <strong>{proximoSalario.titulo}</strong> • dia{' '}
+                        {formatarData(proximoSalario.dataIso)}
+                        {proximoSalario.contaNome
+                          ? ` (${proximoSalario.contaNome})`
+                          : ''}
+                        {resumo.entradasPrevistas > 0
+                          ? ` + ${formatarMoeda(resumo.entradasPrevistas)} avulso`
+                          : ''}
+                      </span>
+                      <div className="salary-card-actions">
+                        <button
+                          type="button"
+                          className="btn-pay"
+                          onClick={() => setModoSalarioModal('receber')}
+                        >
+                          Registrar recebimento
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="card-sub">
+                        Cadastre seu salário fixo para prever automaticamente o próximo mês
+                      </span>
+                      <div className="salary-card-actions">
+                        <button
+                          type="button"
+                          className="btn-small-primary"
+                          onClick={() => setModoSalarioModal('configurar')}
+                        >
+                          + Adicionar salário
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="card">
@@ -778,6 +840,15 @@ export default function Dashboard({ usuario, onSair }) {
         alvo={alvoExclusao}
         onFechar={() => setAlvoExclusao(null)}
         onConfirmar={confirmarExclusao}
+      />
+
+      <SalarioModal
+        modo={modoSalarioModal}
+        salario={salarioConfig}
+        proximo={proximoSalario}
+        contas={contas}
+        onFechar={() => setModoSalarioModal(null)}
+        onAtualizado={() => carregarDados(mes)}
       />
     </div>
   );
