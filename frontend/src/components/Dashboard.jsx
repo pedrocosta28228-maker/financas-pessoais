@@ -85,6 +85,44 @@ function moverMes(mesIso, delta) {
   return `${novoAno}-${String(novoMes).padStart(2, '0')}`;
 }
 
+function montarDataNoMes(ano, mes1a12, diaDesejado) {
+  const ultimoDia = new Date(ano, mes1a12, 0).getDate();
+  const diaFinal = Math.min(diaDesejado, ultimoDia);
+  return `${ano}-${String(mes1a12).padStart(2, '0')}-${String(diaFinal).padStart(2, '0')}`;
+}
+
+/**
+ * Calcula qual salário previsto exibir no card "Previsto para Entrar":
+ * - No modo Geral ou em meses passados: mostra o próximo salário real vindo do servidor.
+ * - No modo Por Mês (mês atual ou futuro): mostra sempre o salário do mês posterior ao mês selecionado
+ *   (ex.: olhando Dezembro -> mostra Salário de Janeiro).
+ */
+function calcularSalarioExibido(mesSelecionado, salarioConfig, proximoReal) {
+  if (!salarioConfig) return null;
+  if (!mesSelecionado) return proximoReal;
+
+  const mesAtual = mesAtualIso();
+  if (mesSelecionado < mesAtual) {
+    return proximoReal;
+  }
+
+  const mesPosterior = moverMes(mesSelecionado, 1);
+  const [anoPost, mesPost] = mesPosterior.split('-').map(Number);
+  const mesNome = NOMES_MESES[mesPost - 1];
+
+  return {
+    titulo: `Salário de ${mesNome}`,
+    mesNome,
+    ano: anoPost,
+    mesRef: mesPosterior,
+    dataIso: montarDataNoMes(anoPost, mesPost, salarioConfig.diaPagamento),
+    valor: salarioConfig.valor,
+    diaPagamento: salarioConfig.diaPagamento,
+    contaId: salarioConfig.contaId || null,
+    contaNome: salarioConfig.contaNome || null,
+  };
+}
+
 export default function Dashboard({ usuario, onSair }) {
   const chaveVistas = `financeiro_dividas_vistas_${usuario.id}`;
 
@@ -211,6 +249,7 @@ export default function Dashboard({ usuario, onSair }) {
 
   const modoGeral = !mes;
   const infoSecao = TITULOS_SECAO[secaoAtiva];
+  const salarioExibido = calcularSalarioExibido(mes, salarioConfig, proximoSalario);
 
   // Subconjuntos por seção
   const listaEntradas = lancamentos.filter((i) => i.tipo === 'entrada');
@@ -482,11 +521,13 @@ export default function Dashboard({ usuario, onSair }) {
           {/* ==================== ABA 2: ENTRADAS & CARTEIRAS ==================== */}
           {secaoAtiva === 'entradas' && (
             <>
-              <ContasSection
-                contas={contas}
-                saldoSemConta={saldoSemConta}
-                onAtualizar={() => carregarDados(mes)}
-              />
+              {modoGeral && (
+                <ContasSection
+                  contas={contas}
+                  saldoSemConta={saldoSemConta}
+                  onAtualizar={() => carregarDados(mes)}
+                />
+              )}
 
               <section className="summary-grid">
                 <div className="card">
@@ -516,17 +557,17 @@ export default function Dashboard({ usuario, onSair }) {
                   <strong className="card-value warning">
                     {formatarMoeda(
                       resumo.entradasPrevistas +
-                        (proximoSalario ? proximoSalario.valor : 0)
+                        (salarioExibido ? salarioExibido.valor : 0)
                     )}
                   </strong>
 
-                  {proximoSalario ? (
+                  {salarioExibido ? (
                     <>
                       <span className="card-sub">
-                        <strong>{proximoSalario.titulo}</strong> • dia{' '}
-                        {formatarData(proximoSalario.dataIso)}
-                        {proximoSalario.contaNome
-                          ? ` (${proximoSalario.contaNome})`
+                        <strong>{salarioExibido.titulo}</strong> • dia{' '}
+                        {formatarData(salarioExibido.dataIso)}
+                        {salarioExibido.contaNome
+                          ? ` (${salarioExibido.contaNome})`
                           : ''}
                         {resumo.entradasPrevistas > 0
                           ? ` + ${formatarMoeda(resumo.entradasPrevistas)} avulso`
@@ -845,7 +886,7 @@ export default function Dashboard({ usuario, onSair }) {
       <SalarioModal
         modo={modoSalarioModal}
         salario={salarioConfig}
-        proximo={proximoSalario}
+        proximo={salarioExibido}
         contas={contas}
         onFechar={() => setModoSalarioModal(null)}
         onAtualizado={() => carregarDados(mes)}
