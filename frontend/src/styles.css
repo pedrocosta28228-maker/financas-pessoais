@@ -1465,27 +1465,49 @@ body {
 }
 
 /* ==================== RECOLHER LISTA + PILLS DE CARTEIRA/CARTÃO ==================== */
-.entries-title-area {
+.entries-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.entries-top-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
 }
 
-.btn-collapse {
+.btn-collapse-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
-  border: 1px solid var(--border);
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 0.8rem;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
 }
 
-.btn-collapse:hover {
-  color: var(--text);
+.btn-collapse-icon:hover {
   border-color: var(--primary);
+  color: var(--text);
+}
+
+.btn-collapse-icon .chevron {
+  width: 17px;
+  height: 17px;
+  transition: transform 0.2s ease;
+}
+
+.btn-collapse-icon .chevron.rotated {
+  transform: rotate(180deg);
 }
 
 .origin-pill {

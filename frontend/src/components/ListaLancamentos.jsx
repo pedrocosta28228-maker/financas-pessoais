@@ -200,7 +200,7 @@ export default function ListaLancamentos({
   return (
     <section className="panel entries-panel">
       <div className="entries-header">
-        <div className="entries-title-area">
+        <div className="entries-top-row">
           <div>
             <h2>{titulo}</h2>
             <span className="chart-subtitle">
@@ -213,10 +213,20 @@ export default function ListaLancamentos({
           {recolhivel && (
             <button
               type="button"
-              className="btn-collapse"
+              className="btn-collapse-icon"
               onClick={alternarRecolhido}
+              title={recolhido ? 'Expandir lançamentos' : 'Recolher lançamentos'}
+              aria-label={recolhido ? 'Expandir lançamentos' : 'Recolher lançamentos'}
             >
-              {recolhido ? 'Expandir ▾' : 'Recolher ▴'}
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className={recolhido ? 'chevron rotated' : 'chevron'}
+              >
+                <path d="m18 15-6-6-6 6" />
+              </svg>
             </button>
           )}
         </div>
