@@ -6,16 +6,16 @@ import { api, salvarToken } from '../api.js';
  * Recebe "onAutenticado" (uma função do App.jsx) para avisar quando o login der certo.
  */
 export default function Login({ onAutenticado }) {
-  // useState guarda dados que mudam na tela (estado do componente)
   const [modo, setModo] = useState('login'); // 'login' ou 'cadastro'
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
+  const [mostrarSenha, setMostrarSenha] = useState(false);
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(false);
 
   async function handleSubmit(e) {
-    e.preventDefault(); // Evita recarregar a página inteira
+    e.preventDefault();
     setErro('');
     setCarregando(true);
 
@@ -43,7 +43,7 @@ export default function Login({ onAutenticado }) {
           <p>
             {modo === 'login'
               ? 'Entre na sua conta para ver seus saldos e dívidas'
-              : 'Crie sua conta local para proteger seus dados'}
+              : 'Crie sua conta para organizar seu dinheiro'}
           </p>
         </div>
 
@@ -76,6 +76,7 @@ export default function Login({ onAutenticado }) {
               <span>Seu nome</span>
               <input
                 type="text"
+                autoComplete="name"
                 placeholder="Ex.: Pedro Morais"
                 value={nome}
                 onChange={(e) => setNome(e.target.value)}
@@ -88,6 +89,9 @@ export default function Login({ onAutenticado }) {
             <span>E-mail</span>
             <input
               type="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
               placeholder="seu@email.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -97,14 +101,52 @@ export default function Login({ onAutenticado }) {
 
           <label className="field">
             <span>Senha</span>
-            <input
-              type="password"
-              placeholder="Mínimo 6 caracteres"
-              value={senha}
-              onChange={(e) => setSenha(e.target.value)}
-              minLength={6}
-              required
-            />
+            <div className="password-wrap">
+              <input
+                type={mostrarSenha ? 'text' : 'password'}
+                autoComplete={modo === 'login' ? 'current-password' : 'new-password'}
+                placeholder="Mínimo 6 caracteres"
+                value={senha}
+                onChange={(e) => setSenha(e.target.value)}
+                minLength={6}
+                required
+              />
+              <button
+                type="button"
+                className="btn-eye"
+                onClick={() => setMostrarSenha((v) => !v)}
+                aria-label={mostrarSenha ? 'Ocultar senha' : 'Mostrar senha'}
+                title={mostrarSenha ? 'Ocultar senha' : 'Mostrar senha'}
+              >
+                {mostrarSenha ? (
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                    <path d="m14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                    <line x1="1" y1="1" x2="23" y2="23" />
+                  </svg>
+                ) : (
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </label>
 
           {erro && <div className="alert-error">{erro}</div>}
@@ -119,7 +161,7 @@ export default function Login({ onAutenticado }) {
         </form>
 
         <p className="auth-footer">
-          Seus dados ficam salvos localmente no seu computador em SQLite com senha criptografada.
+          Sua senha é protegida com criptografia e cada conta acessa apenas os próprios dados.
         </p>
       </div>
     </div>
