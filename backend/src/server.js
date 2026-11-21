@@ -5,8 +5,22 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db } from './db.js';
+import { db, initDb, dbType } from './db.js';
 import { hashSenha, verificarSenha, gerarToken, autenticar } from './auth.js';
+import {
+  helmetMiddleware,
+  criarOpcoesCors,
+  authRateLimiter,
+  apiRateLimiter,
+  validarEmail,
+} from './security.js';
+
+/**
+ * Envolve rotas async no Express 4 para que qualquer erro rejeitado
+ * caia automaticamente no tratador global de erros (sem travar o servidor).
+ */
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
 
 /**
  * Soma N meses a uma data YYYY-MM-DD preservando o dia de vencimento
@@ -28,89 +42,129 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const IS_PROD = process.env.NODE_ENV === 'production';
+const HOST = IS_PROD ? '0.0.0.0' : '127.0.0.1';
 
-// Middlewares globais: libera acesso do React (CORS) e permite ler JSON no corpo das requisições
-app.use(cors());
-app.use(express.json());
+// Em hospedagens na nuvem (Render, Railway etc.), existe um proxy na frente do Node.
+// "trust proxy" permite ao Rate Limit enxergar o IP real de cada visitante.
+if (IS_PROD) {
+  app.set('trust proxy', 1);
+}
+
+// Esconde o cabeçalho "X-Powered-By: Express" para não facilitar reconhecimento por invasores
+app.disable('x-powered-by');
+
+// Middlewares de segurança e leitura de JSON com limite de tamanho (100kb)
+app.use(helmetMiddleware);
+app.use(cors(criarOpcoesCors()));
+app.use(express.json({ limit: '100kb' }));
+app.use('/api', apiRateLimiter);
 
 // Rota simples para testar se o servidor está no ar
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, mensagem: 'API Financeiro rodando!' });
+  res.json({ ok: true, mensagem: 'API Financeiro rodando!', banco: dbType });
 });
 
 // ============================================================================
 // ROTAS DE AUTENTICAÇÃO (Cadastro, Login e Usuário Logado)
 // ============================================================================
 
-// 1. Criar nova conta
-app.post('/api/auth/register', (req, res) => {
-  const { nome, email, senha } = req.body;
+// 1. Criar nova conta (protegida por Rate Limit contra spam/força bruta)
+app.post(
+  '/api/auth/register',
+  authRateLimiter,
+  asyncHandler(async (req, res) => {
+    const { nome, email, senha } = req.body;
 
-  if (!nome?.trim() || !email?.trim() || !senha) {
-    return res.status(400).json({ erro: 'Preencha nome, e-mail e senha.' });
-  }
+    if (!nome?.trim() || !email?.trim() || !senha) {
+      return res.status(400).json({ erro: 'Preencha nome, e-mail e senha.' });
+    }
 
-  if (senha.length < 6) {
-    return res.status(400).json({ erro: 'A senha precisa ter pelo menos 6 caracteres.' });
-  }
+    if (nome.trim().length > 80) {
+      return res.status(400).json({ erro: 'O nome pode ter no máximo 80 caracteres.' });
+    }
 
-  const emailLimpo = email.trim().toLowerCase();
+    if (!validarEmail(email)) {
+      return res.status(400).json({ erro: 'Informe um endereço de e-mail válido.' });
+    }
 
-  // Verifica no SQL se já existe uma conta com esse e-mail
-  const existente = db
-    .prepare('SELECT id FROM usuarios WHERE email = ?')
-    .get(emailLimpo);
+    if (typeof senha !== 'string' || senha.length < 6 || senha.length > 128) {
+      return res
+        .status(400)
+        .json({ erro: 'A senha precisa ter entre 6 e 128 caracteres.' });
+    }
 
-  if (existente) {
-    return res.status(409).json({ erro: 'Já existe uma conta cadastrada com este e-mail.' });
-  }
+    const emailLimpo = email.trim().toLowerCase();
 
-  const senhaCriptografada = hashSenha(senha);
+    // Verifica no SQL se já existe uma conta com esse e-mail
+    const existente = await db.get(
+      'SELECT id FROM usuarios WHERE email = ?',
+      emailLimpo
+    );
 
-  // INSERT com "?" (Prepared Statement) evita ataques de SQL Injection
-  const resultado = db
-    .prepare('INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)')
-    .run(nome.trim(), emailLimpo, senhaCriptografada);
+    if (existente) {
+      return res.status(409).json({ erro: 'Já existe uma conta cadastrada com este e-mail.' });
+    }
 
-  const novoUsuario = {
-    id: Number(resultado.lastInsertRowid),
-    nome: nome.trim(),
-    email: emailLimpo,
-  };
+    const senhaCriptografada = hashSenha(senha);
 
-  const token = gerarToken(novoUsuario);
+    // INSERT com "?" (Prepared Statement) evita ataques de SQL Injection
+    const novoId = await db.insert(
+      'INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)',
+      nome.trim(),
+      emailLimpo,
+      senhaCriptografada
+    );
 
-  return res.status(201).json({ usuario: novoUsuario, token });
-});
+    const novoUsuario = {
+      id: novoId,
+      nome: nome.trim(),
+      email: emailLimpo,
+    };
 
-// 2. Fazer login
-app.post('/api/auth/login', (req, res) => {
-  const { email, senha } = req.body;
+    const token = gerarToken(novoUsuario);
 
-  if (!email?.trim() || !senha) {
-    return res.status(400).json({ erro: 'Informe seu e-mail e sua senha.' });
-  }
+    return res.status(201).json({ usuario: novoUsuario, token });
+  })
+);
 
-  const emailLimpo = email.trim().toLowerCase();
+// 2. Fazer login (protegida por Rate Limit contra tentativas de adivinhar senha)
+app.post(
+  '/api/auth/login',
+  authRateLimiter,
+  asyncHandler(async (req, res) => {
+    const { email, senha } = req.body;
 
-  const usuarioDb = db
-    .prepare('SELECT id, nome, email, senha_hash FROM usuarios WHERE email = ?')
-    .get(emailLimpo);
+    if (!email?.trim() || !senha) {
+      return res.status(400).json({ erro: 'Informe seu e-mail e sua senha.' });
+    }
 
-  if (!usuarioDb || !verificarSenha(senha, usuarioDb.senha_hash)) {
-    return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
-  }
+    if (typeof senha !== 'string' || senha.length > 128) {
+      return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
+    }
 
-  const usuario = {
-    id: usuarioDb.id,
-    nome: usuarioDb.nome,
-    email: usuarioDb.email,
-  };
+    const emailLimpo = email.trim().toLowerCase();
 
-  const token = gerarToken(usuario);
+    const usuarioDb = await db.get(
+      'SELECT id, nome, email, senha_hash FROM usuarios WHERE email = ?',
+      emailLimpo
+    );
 
-  return res.json({ usuario, token });
-});
+    if (!usuarioDb || !verificarSenha(senha, usuarioDb.senha_hash)) {
+      return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
+    }
+
+    const usuario = {
+      id: usuarioDb.id,
+      nome: usuarioDb.nome,
+      email: usuarioDb.email,
+    };
+
+    const token = gerarToken(usuario);
+
+    return res.json({ usuario, token });
+  })
+);
 
 // 3. Consultar quem está logado (rota protegida pelo middleware "autenticar")
 app.get('/api/auth/me', autenticar, (req, res) => {
@@ -124,16 +178,18 @@ app.get('/api/auth/me', autenticar, (req, res) => {
 /**
  * Garante que a conta informada existe e pertence ao usuário logado (evita IDOR).
  */
-function resolverContaId(contaIdBruto, usuarioId) {
+async function resolverContaId(contaIdBruto, usuarioId) {
   if (contaIdBruto === undefined || contaIdBruto === null || contaIdBruto === '') {
     return null;
   }
   const id = Number(contaIdBruto);
   if (!Number.isInteger(id) || id <= 0) return null;
 
-  const conta = db
-    .prepare('SELECT id FROM contas WHERE id = ? AND usuario_id = ?')
-    .get(id, usuarioId);
+  const conta = await db.get(
+    'SELECT id FROM contas WHERE id = ? AND usuario_id = ?',
+    id,
+    usuarioId
+  );
 
   return conta ? conta.id : null;
 }
@@ -150,314 +206,340 @@ const SELECT_LANCAMENTO_BASE = `
 `;
 
 // 4. Listar lançamentos (todos ou de um mês específico) e calcular resumo
-app.get('/api/lancamentos', autenticar, (req, res) => {
-  const { mes } = req.query; // Formato esperado: YYYY-MM
+app.get(
+  '/api/lancamentos',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const { mes } = req.query; // Formato esperado: YYYY-MM
 
-  let lancamentos;
+    let lancamentos;
 
-  if (mes && /^\d{4}-\d{2}$/.test(mes)) {
-    lancamentos = db
-      .prepare(`
-        ${SELECT_LANCAMENTO_BASE}
-        WHERE l.usuario_id = ? AND substr(l.data, 1, 7) = ?
-        ORDER BY l.data DESC, l.id DESC
-      `)
-      .all(req.usuario.id, mes);
-  } else {
-    lancamentos = db
-      .prepare(`
-        ${SELECT_LANCAMENTO_BASE}
-        WHERE l.usuario_id = ?
-        ORDER BY l.data DESC, l.id DESC
-      `)
-      .all(req.usuario.id);
-  }
+    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
+      lancamentos = await db.all(
+        `
+          ${SELECT_LANCAMENTO_BASE}
+          WHERE l.usuario_id = ? AND substr(l.data, 1, 7) = ?
+          ORDER BY l.data DESC, l.id DESC
+        `,
+        req.usuario.id,
+        mes
+      );
+    } else {
+      lancamentos = await db.all(
+        `
+          ${SELECT_LANCAMENTO_BASE}
+          WHERE l.usuario_id = ?
+          ORDER BY l.data DESC, l.id DESC
+        `,
+        req.usuario.id
+      );
+    }
 
-  // Calcula os totais: o que entrou, o que saiu (do saldo) e o que ainda vai sair
-  const resumo = lancamentos.reduce(
-    (acc, item) => {
-      if (item.tipo === 'entrada') {
-        if (item.status === 'pago') {
-          acc.entradasRecebidas += item.valor;
-        } else {
-          acc.entradasPrevistas += item.valor;
-        }
-      } else {
-        // Tanto "saida" quanto "divida" contam como negativo
-        if (item.status === 'pago') {
-          if (item.descontar_saldo !== 0) {
-            acc.saidasPagas += item.valor;
+    // Calcula os totais: o que entrou, o que saiu (do saldo) e o que ainda vai sair
+    const resumo = lancamentos.reduce(
+      (acc, item) => {
+        if (item.tipo === 'entrada') {
+          if (item.status === 'pago') {
+            acc.entradasRecebidas += item.valor;
           } else {
-            acc.saidasPagasPorFora += item.valor;
+            acc.entradasPrevistas += item.valor;
           }
         } else {
-          acc.saidasAPagar += item.valor;
-        }
+          // Tanto "saida" quanto "divida" contam como negativo
+          if (item.status === 'pago') {
+            if (item.descontar_saldo !== 0) {
+              acc.saidasPagas += item.valor;
+            } else {
+              acc.saidasPagasPorFora += item.valor;
+            }
+          } else {
+            acc.saidasAPagar += item.valor;
+          }
 
-        if (item.tipo === 'divida' && item.status === 'pendente') {
-          acc.dividasPendentes += item.valor;
+          if (item.tipo === 'divida' && item.status === 'pendente') {
+            acc.dividasPendentes += item.valor;
+          }
         }
+        return acc;
+      },
+      {
+        entradasRecebidas: 0,
+        entradasPrevistas: 0,
+        saidasPagas: 0,
+        saidasPagasPorFora: 0,
+        saidasAPagar: 0,
+        dividasPendentes: 0,
       }
-      return acc;
-    },
-    {
-      entradasRecebidas: 0,
-      entradasPrevistas: 0,
-      saidasPagas: 0,
-      saidasPagasPorFora: 0,
-      saidasAPagar: 0,
-      dividasPendentes: 0,
-    }
-  );
+    );
 
-  // Saldo Real = o que já entrou menos o que já saiu
-  const saldoReal = resumo.entradasRecebidas - resumo.saidasPagas;
-  // Saldo Previsto = considerando tudo que ainda vai entrar e tudo que ainda vai sair
-  const saldoPrevisto =
-    resumo.entradasRecebidas +
-    resumo.entradasPrevistas -
-    (resumo.saidasPagas + resumo.saidasAPagar);
+    // Saldo Real = o que já entrou menos o que já saiu
+    const saldoReal = resumo.entradasRecebidas - resumo.saidasPagas;
+    // Saldo Previsto = considerando tudo que ainda vai entrar e tudo que ainda vai sair
+    const saldoPrevisto =
+      resumo.entradasRecebidas +
+      resumo.entradasPrevistas -
+      (resumo.saidasPagas + resumo.saidasAPagar);
 
-  return res.json({
-    lancamentos,
-    resumo: {
-      ...resumo,
-      saldoReal,
-      saldoPrevisto,
-    },
-  });
-});
+    return res.json({
+      lancamentos,
+      resumo: {
+        ...resumo,
+        saldoReal,
+        saldoPrevisto,
+      },
+    });
+  })
+);
 
 // 5. Criar novo lançamento (entrada, saída ou dívida — com suporte a parcelamento, carteira e origem da dívida!)
-app.post('/api/lancamentos', autenticar, (req, res) => {
-  const {
-    titulo,
-    valor,
-    tipo,
-    categoria,
-    data,
-    status,
-    observacao,
-    parcelas,
-    modoValorParcela,
-    contaId,
-    origemDivida,
-  } = req.body;
+app.post(
+  '/api/lancamentos',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const {
+      titulo,
+      valor,
+      tipo,
+      categoria,
+      data,
+      status,
+      observacao,
+      parcelas,
+      modoValorParcela,
+      contaId,
+      origemDivida,
+    } = req.body;
 
-  const valorNumero = Number(valor);
-  const tiposValidos = ['entrada', 'saida', 'divida'];
-  const statusValidos = ['pago', 'pendente'];
+    const valorNumero = Number(valor);
+    const tiposValidos = ['entrada', 'saida', 'divida'];
+    const statusValidos = ['pago', 'pendente'];
 
-  if (!titulo?.trim()) {
-    return res.status(400).json({ erro: 'Informe uma descrição (título) para o lançamento.' });
-  }
-  if (!Number.isFinite(valorNumero) || valorNumero <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
-  }
-  if (!tiposValidos.includes(tipo)) {
-    return res.status(400).json({ erro: 'Tipo inválido. Use: entrada, saida ou divida.' });
-  }
-  if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data)) {
-    return res.status(400).json({ erro: 'Informe uma data válida (AAAA-MM-DD).' });
-  }
-
-  const totalParcelas =
-    tipo === 'divida' ? Math.max(1, Math.min(60, Math.floor(Number(parcelas) || 1))) : 1;
-
-  const statusFinal = statusValidos.includes(status) ? status : 'pago';
-  const categoriaFinal = categoria?.trim() || 'Geral';
-  const observacaoFinal = observacao?.trim() || '';
-  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
-  const origemDividaFinal = tipo === 'divida' ? (origemDivida?.trim() || '') : '';
-
-  const insertStmt = db.prepare(`
-    INSERT INTO lancamentos (
-      usuario_id, titulo, valor, tipo, categoria, data, status,
-      observacao, grupo_parcela, conta_id, origem_divida
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const selectById = db.prepare(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`);
-
-  // Se for dívida parcelada (2x ou mais), grava todas as parcelas juntas numa Transação SQL
-  if (totalParcelas > 1) {
-    const grupoId = crypto.randomUUID();
-    const dividirTotal = modoValorParcela === 'total';
-    const valorBase = dividirTotal
-      ? Math.floor((valorNumero / totalParcelas) * 100) / 100
-      : Math.round(valorNumero * 100) / 100;
-    const diferencaCentavos = dividirTotal
-      ? Math.round((valorNumero - valorBase * totalParcelas) * 100) / 100
-      : 0;
-
-    const criados = [];
-
-    db.exec('BEGIN');
-    try {
-      for (let i = 0; i < totalParcelas; i++) {
-        const dataParcela = somarMesesSeguro(data, i);
-        const tituloParcela = `${titulo.trim()} (${i + 1}/${totalParcelas})`;
-        const valorParcela =
-          i === totalParcelas - 1
-            ? Math.round((valorBase + diferencaCentavos) * 100) / 100
-            : valorBase;
-
-        const resultado = insertStmt.run(
-          req.usuario.id,
-          tituloParcela,
-          valorParcela,
-          tipo,
-          categoriaFinal,
-          dataParcela,
-          statusFinal,
-          observacaoFinal,
-          grupoId,
-          contaIdFinal,
-          origemDividaFinal
-        );
-
-        criados.push(selectById.get(Number(resultado.lastInsertRowid)));
-      }
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
+    if (!titulo?.trim()) {
+      return res.status(400).json({ erro: 'Informe uma descrição (título) para o lançamento.' });
+    }
+    if (!Number.isFinite(valorNumero) || valorNumero <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
+    }
+    if (!tiposValidos.includes(tipo)) {
+      return res.status(400).json({ erro: 'Tipo inválido. Use: entrada, saida ou divida.' });
+    }
+    if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+      return res.status(400).json({ erro: 'Informe uma data válida (AAAA-MM-DD).' });
     }
 
-    return res.status(201).json({ lancamento: criados[0], lancamentos: criados });
-  }
+    const totalParcelas =
+      tipo === 'divida' ? Math.max(1, Math.min(60, Math.floor(Number(parcelas) || 1))) : 1;
 
-  const resultado = insertStmt.run(
-    req.usuario.id,
-    titulo.trim(),
-    valorNumero,
-    tipo,
-    categoriaFinal,
-    data,
-    statusFinal,
-    observacaoFinal,
-    null,
-    contaIdFinal,
-    origemDividaFinal
-  );
+    const statusFinal = statusValidos.includes(status) ? status : 'pago';
+    const categoriaFinal = categoria?.trim() || 'Geral';
+    const observacaoFinal = observacao?.trim() || '';
+    const contaIdFinal = await resolverContaId(contaId, req.usuario.id);
+    const origemDividaFinal = tipo === 'divida' ? (origemDivida?.trim() || '') : '';
 
-  const criado = selectById.get(Number(resultado.lastInsertRowid));
-  return res.status(201).json({ lancamento: criado });
-});
+    const insertSql = `
+      INSERT INTO lancamentos (
+        usuario_id, titulo, valor, tipo, categoria, data, status,
+        observacao, grupo_parcela, conta_id, origem_divida
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const selectByIdSql = `${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`;
+
+    // Se for dívida parcelada (2x ou mais), grava todas as parcelas juntas numa Transação SQL
+    if (totalParcelas > 1) {
+      const grupoId = crypto.randomUUID();
+      const dividirTotal = modoValorParcela === 'total';
+      const valorBase = dividirTotal
+        ? Math.floor((valorNumero / totalParcelas) * 100) / 100
+        : Math.round(valorNumero * 100) / 100;
+      const diferencaCentavos = dividirTotal
+        ? Math.round((valorNumero - valorBase * totalParcelas) * 100) / 100
+        : 0;
+
+      const criados = await db.transaction(async (tx) => {
+        const lista = [];
+        for (let i = 0; i < totalParcelas; i++) {
+          const dataParcela = somarMesesSeguro(data, i);
+          const tituloParcela = `${titulo.trim()} (${i + 1}/${totalParcelas})`;
+          const valorParcela =
+            i === totalParcelas - 1
+              ? Math.round((valorBase + diferencaCentavos) * 100) / 100
+              : valorBase;
+
+          const novoId = await tx.insert(
+            insertSql,
+            req.usuario.id,
+            tituloParcela,
+            valorParcela,
+            tipo,
+            categoriaFinal,
+            dataParcela,
+            statusFinal,
+            observacaoFinal,
+            grupoId,
+            contaIdFinal,
+            origemDividaFinal
+          );
+
+          lista.push(await tx.get(selectByIdSql, novoId));
+        }
+        return lista;
+      });
+
+      return res.status(201).json({ lancamento: criados[0], lancamentos: criados });
+    }
+
+    const novoId = await db.insert(
+      insertSql,
+      req.usuario.id,
+      titulo.trim(),
+      valorNumero,
+      tipo,
+      categoriaFinal,
+      data,
+      statusFinal,
+      observacaoFinal,
+      null,
+      contaIdFinal,
+      origemDividaFinal
+    );
+
+    const criado = await db.get(selectByIdSql, novoId);
+    return res.status(201).json({ lancamento: criado });
+  })
+);
 
 // 6. Atualizar status (marcar como pago/adiantado com opção de descontar do saldo e carteira, ou voltar para pendente)
-app.patch('/api/lancamentos/:id/status', autenticar, (req, res) => {
-  const id = Number(req.params.id);
-  const { status, descontarSaldo, valor, contaId } = req.body;
+app.patch(
+  '/api/lancamentos/:id/status',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { status, descontarSaldo, valor, contaId } = req.body;
 
-  if (!['pago', 'pendente'].includes(status)) {
-    return res.status(400).json({ erro: 'Status inválido. Use "pago" ou "pendente".' });
-  }
+    if (!['pago', 'pendente'].includes(status)) {
+      return res.status(400).json({ erro: 'Status inválido. Use "pago" ou "pendente".' });
+    }
 
-  const descontarValorDb =
-    status === 'pendente' ? 1 : descontarSaldo === false ? 0 : 1;
+    const descontarValorDb =
+      status === 'pendente' ? 1 : descontarSaldo === false ? 0 : 1;
 
-  const valorNumero = valor !== undefined && valor !== null ? Number(valor) : null;
-  if (valorNumero !== null && (!Number.isFinite(valorNumero) || valorNumero <= 0)) {
-    return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
-  }
+    const valorNumero = valor !== undefined && valor !== null ? Number(valor) : null;
+    if (valorNumero !== null && (!Number.isFinite(valorNumero) || valorNumero <= 0)) {
+      return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
+    }
 
-  const temContaNoBody = contaId !== undefined;
-  const contaIdFinal =
-    status === 'pendente' || descontarValorDb === 0
-      ? null
-      : resolverContaId(contaId, req.usuario.id);
+    const temContaNoBody = contaId !== undefined;
+    const contaIdFinal =
+      status === 'pendente' || descontarValorDb === 0
+        ? null
+        : await resolverContaId(contaId, req.usuario.id);
 
-  // O "AND usuario_id = ?" garante que você só altera lançamentos da SUA conta
-  let resultado;
-  if (valorNumero !== null && (temContaNoBody || status === 'pendente')) {
-    resultado = db
-      .prepare(
-        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ?, conta_id = ? WHERE id = ? AND usuario_id = ?'
-      )
-      .run(status, descontarValorDb, valorNumero, contaIdFinal, id, req.usuario.id);
-  } else if (valorNumero !== null) {
-    resultado = db
-      .prepare(
-        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ? WHERE id = ? AND usuario_id = ?'
-      )
-      .run(status, descontarValorDb, valorNumero, id, req.usuario.id);
-  } else if (temContaNoBody || status === 'pendente') {
-    resultado = db
-      .prepare(
-        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, conta_id = ? WHERE id = ? AND usuario_id = ?'
-      )
-      .run(status, descontarValorDb, contaIdFinal, id, req.usuario.id);
-  } else {
-    resultado = db
-      .prepare(
-        'UPDATE lancamentos SET status = ?, descontar_saldo = ? WHERE id = ? AND usuario_id = ?'
-      )
-      .run(status, descontarValorDb, id, req.usuario.id);
-  }
+    // O "AND usuario_id = ?" garante que você só altera lançamentos da SUA conta
+    let resultado;
+    if (valorNumero !== null && (temContaNoBody || status === 'pendente')) {
+      resultado = await db.run(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ?, conta_id = ? WHERE id = ? AND usuario_id = ?',
+        status,
+        descontarValorDb,
+        valorNumero,
+        contaIdFinal,
+        id,
+        req.usuario.id
+      );
+    } else if (valorNumero !== null) {
+      resultado = await db.run(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, valor = ? WHERE id = ? AND usuario_id = ?',
+        status,
+        descontarValorDb,
+        valorNumero,
+        id,
+        req.usuario.id
+      );
+    } else if (temContaNoBody || status === 'pendente') {
+      resultado = await db.run(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ?, conta_id = ? WHERE id = ? AND usuario_id = ?',
+        status,
+        descontarValorDb,
+        contaIdFinal,
+        id,
+        req.usuario.id
+      );
+    } else {
+      resultado = await db.run(
+        'UPDATE lancamentos SET status = ?, descontar_saldo = ? WHERE id = ? AND usuario_id = ?',
+        status,
+        descontarValorDb,
+        id,
+        req.usuario.id
+      );
+    }
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Lançamento não encontrado.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Lançamento não encontrado.' });
+    }
 
-  const atualizado = db.prepare(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`).get(id);
+    const atualizado = await db.get(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`, id);
 
-  return res.json({ lancamento: atualizado });
-});
+    return res.json({ lancamento: atualizado });
+  })
+);
 
 // 7. Editar um lançamento existente
-app.put('/api/lancamentos/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
-  const {
-    titulo,
-    valor,
-    tipo,
-    categoria,
-    data,
-    status,
-    observacao,
-    descontarSaldo,
-    contaId,
-    origemDivida,
-  } = req.body;
+app.put(
+  '/api/lancamentos/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const {
+      titulo,
+      valor,
+      tipo,
+      categoria,
+      data,
+      status,
+      observacao,
+      descontarSaldo,
+      contaId,
+      origemDivida,
+    } = req.body;
 
-  const valorNumero = Number(valor);
-  const tiposValidos = ['entrada', 'saida', 'divida'];
-  const statusValidos = ['pago', 'pendente'];
+    const valorNumero = Number(valor);
+    const tiposValidos = ['entrada', 'saida', 'divida'];
+    const statusValidos = ['pago', 'pendente'];
 
-  if (!titulo?.trim()) {
-    return res.status(400).json({ erro: 'Informe uma descrição para o lançamento.' });
-  }
-  if (!Number.isFinite(valorNumero) || valorNumero <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
-  }
-  if (!tiposValidos.includes(tipo)) {
-    return res.status(400).json({ erro: 'Tipo inválido.' });
-  }
-  if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data)) {
-    return res.status(400).json({ erro: 'Informe uma data válida (AAAA-MM-DD).' });
-  }
+    if (!titulo?.trim()) {
+      return res.status(400).json({ erro: 'Informe uma descrição para o lançamento.' });
+    }
+    if (!Number.isFinite(valorNumero) || valorNumero <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
+    }
+    if (!tiposValidos.includes(tipo)) {
+      return res.status(400).json({ erro: 'Tipo inválido.' });
+    }
+    if (!data || !/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+      return res.status(400).json({ erro: 'Informe uma data válida (AAAA-MM-DD).' });
+    }
 
-  const statusFinal = statusValidos.includes(status) ? status : 'pago';
-  const categoriaFinal = categoria?.trim() || 'Geral';
-  const observacaoFinal = observacao?.trim() || '';
-  const descontarValorDb =
-    statusFinal === 'pendente' || tipo === 'entrada'
-      ? 1
-      : descontarSaldo === false
-        ? 0
-        : 1;
-  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
-  const origemDividaFinal = tipo === 'divida' ? (origemDivida?.trim() || '') : '';
+    const statusFinal = statusValidos.includes(status) ? status : 'pago';
+    const categoriaFinal = categoria?.trim() || 'Geral';
+    const observacaoFinal = observacao?.trim() || '';
+    const descontarValorDb =
+      statusFinal === 'pendente' || tipo === 'entrada'
+        ? 1
+        : descontarSaldo === false
+          ? 0
+          : 1;
+    const contaIdFinal = await resolverContaId(contaId, req.usuario.id);
+    const origemDividaFinal = tipo === 'divida' ? (origemDivida?.trim() || '') : '';
 
-  const resultado = db
-    .prepare(`
-      UPDATE lancamentos
-      SET titulo = ?, valor = ?, tipo = ?, categoria = ?, data = ?, status = ?,
-          observacao = ?, descontar_saldo = ?, conta_id = ?, origem_divida = ?
-      WHERE id = ? AND usuario_id = ?
-    `)
-    .run(
+    const resultado = await db.run(
+      `
+        UPDATE lancamentos
+        SET titulo = ?, valor = ?, tipo = ?, categoria = ?, data = ?, status = ?,
+            observacao = ?, descontar_saldo = ?, conta_id = ?, origem_divida = ?
+        WHERE id = ? AND usuario_id = ?
+      `,
       titulo.trim(),
       valorNumero,
       tipo,
@@ -472,233 +554,286 @@ app.put('/api/lancamentos/:id', autenticar, (req, res) => {
       req.usuario.id
     );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Lançamento não encontrado.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Lançamento não encontrado.' });
+    }
 
-  const atualizado = db.prepare(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`).get(id);
+    const atualizado = await db.get(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`, id);
 
-  return res.json({ lancamento: atualizado });
-});
+    return res.json({ lancamento: atualizado });
+  })
+);
 
 // 8. Excluir todas as parcelas de um grupo de dívida de uma vez
-app.delete('/api/lancamentos/grupo/:grupoId', autenticar, (req, res) => {
-  const { grupoId } = req.params;
+app.delete(
+  '/api/lancamentos/grupo/:grupoId',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const { grupoId } = req.params;
 
-  const resultado = db
-    .prepare('DELETE FROM lancamentos WHERE grupo_parcela = ? AND usuario_id = ?')
-    .run(grupoId, req.usuario.id);
+    const resultado = await db.run(
+      'DELETE FROM lancamentos WHERE grupo_parcela = ? AND usuario_id = ?',
+      grupoId,
+      req.usuario.id
+    );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Grupo de parcelas não encontrado.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Grupo de parcelas não encontrado.' });
+    }
 
-  return res.json({ ok: true, removidos: resultado.changes });
-});
+    return res.json({ ok: true, removidos: resultado.changes });
+  })
+);
 
 // 9. Excluir um único lançamento (ou uma única parcela)
-app.delete('/api/lancamentos/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
+app.delete(
+  '/api/lancamentos/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
 
-  const resultado = db
-    .prepare('DELETE FROM lancamentos WHERE id = ? AND usuario_id = ?')
-    .run(id, req.usuario.id);
+    const resultado = await db.run(
+      'DELETE FROM lancamentos WHERE id = ? AND usuario_id = ?',
+      id,
+      req.usuario.id
+    );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Lançamento não encontrado.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Lançamento não encontrado.' });
+    }
 
-  return res.json({ ok: true });
-});
+    return res.json({ ok: true });
+  })
+);
 
 // ============================================================================
 // ROTAS DE CARTEIRAS / CONTAS (Onde seu dinheiro está guardado)
 // ============================================================================
 
 // 10. Listar carteiras com saldo calculado via SQL (LEFT JOIN + GROUP BY)
-app.get('/api/contas', autenticar, (req, res) => {
-  const contas = db
-    .prepare(`
-      SELECT
-        c.id,
-        c.nome,
-        c.etiqueta,
-        c.rendimento,
-        c.cor,
-        c.saldo_ajuste,
-        c.saldo_ajuste + COALESCE(SUM(
+app.get(
+  '/api/contas',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const contas = await db.all(
+      `
+        SELECT
+          c.id,
+          c.nome,
+          c.etiqueta,
+          c.rendimento,
+          c.cor,
+          c.saldo_ajuste,
+          c.saldo_ajuste + COALESCE(SUM(
+            CASE
+              WHEN l.tipo = 'entrada' AND l.status = 'pago' THEN l.valor
+              WHEN l.tipo IN ('saida', 'divida') AND l.status = 'pago' AND l.descontar_saldo != 0 THEN -l.valor
+              ELSE 0
+            END
+          ), 0) AS saldo
+        FROM contas c
+        LEFT JOIN lancamentos l ON l.conta_id = c.id AND l.usuario_id = c.usuario_id
+        WHERE c.usuario_id = ?
+        GROUP BY c.id, c.nome, c.etiqueta, c.rendimento, c.cor, c.saldo_ajuste
+        ORDER BY c.id ASC
+      `,
+      req.usuario.id
+    );
+
+    const semContaRow = await db.get(
+      `
+        SELECT COALESCE(SUM(
           CASE
-            WHEN l.tipo = 'entrada' AND l.status = 'pago' THEN l.valor
-            WHEN l.tipo IN ('saida', 'divida') AND l.status = 'pago' AND l.descontar_saldo != 0 THEN -l.valor
+            WHEN tipo = 'entrada' AND status = 'pago' THEN valor
+            WHEN tipo IN ('saida', 'divida') AND status = 'pago' AND descontar_saldo != 0 THEN -valor
             ELSE 0
           END
-        ), 0) AS saldo
-      FROM contas c
-      LEFT JOIN lancamentos l ON l.conta_id = c.id AND l.usuario_id = c.usuario_id
-      WHERE c.usuario_id = ?
-      GROUP BY c.id
-      ORDER BY c.id ASC
-    `)
-    .all(req.usuario.id);
+        ), 0) AS total
+        FROM lancamentos
+        WHERE usuario_id = ? AND conta_id IS NULL
+      `,
+      req.usuario.id
+    );
 
-  const semContaRow = db
-    .prepare(`
-      SELECT COALESCE(SUM(
-        CASE
-          WHEN tipo = 'entrada' AND status = 'pago' THEN valor
-          WHEN tipo IN ('saida', 'divida') AND status = 'pago' AND descontar_saldo != 0 THEN -valor
-          ELSE 0
-        END
-      ), 0) AS total
-      FROM lancamentos
-      WHERE usuario_id = ? AND conta_id IS NULL
-    `)
-    .get(req.usuario.id);
-
-  return res.json({
-    contas,
-    saldoSemConta: semContaRow?.total || 0,
-  });
-});
+    return res.json({
+      contas,
+      saldoSemConta: Number(semContaRow?.total || 0),
+    });
+  })
+);
 
 // 11. Criar nova carteira
-app.post('/api/contas', autenticar, (req, res) => {
-  const { nome, etiqueta, rendimento, cor } = req.body;
+app.post(
+  '/api/contas',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const { nome, etiqueta, rendimento, cor } = req.body;
 
-  if (!nome?.trim()) {
-    return res.status(400).json({ erro: 'Informe o nome da carteira (ex.: RecargaPay, Cofrinho).' });
-  }
+    if (!nome?.trim()) {
+      return res.status(400).json({ erro: 'Informe o nome da carteira (ex.: RecargaPay, Cofrinho).' });
+    }
 
-  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
-  const etiquetaFinal = etiqueta?.trim() || '';
-  const rendimentoFinal = rendimento?.trim() || '';
+    const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
+    const etiquetaFinal = etiqueta?.trim() || '';
+    const rendimentoFinal = rendimento?.trim() || '';
 
-  const resultado = db
-    .prepare('INSERT INTO contas (usuario_id, nome, etiqueta, rendimento, cor) VALUES (?, ?, ?, ?, ?)')
-    .run(req.usuario.id, nome.trim(), etiquetaFinal, rendimentoFinal, corFinal);
+    const novoId = await db.insert(
+      'INSERT INTO contas (usuario_id, nome, etiqueta, rendimento, cor) VALUES (?, ?, ?, ?, ?)',
+      req.usuario.id,
+      nome.trim(),
+      etiquetaFinal,
+      rendimentoFinal,
+      corFinal
+    );
 
-  const criada = db
-    .prepare('SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ?')
-    .get(Number(resultado.lastInsertRowid));
+    const criada = await db.get(
+      'SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ?',
+      novoId
+    );
 
-  return res.status(201).json({ conta: { ...criada, saldo: 0 } });
-});
+    return res.status(201).json({ conta: { ...criada, saldo: 0 } });
+  })
+);
 
 // 12. Editar carteira
-app.put('/api/contas/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
-  const { nome, etiqueta, rendimento, cor } = req.body;
+app.put(
+  '/api/contas/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { nome, etiqueta, rendimento, cor } = req.body;
 
-  if (!nome?.trim()) {
-    return res.status(400).json({ erro: 'Informe o nome da carteira.' });
-  }
+    if (!nome?.trim()) {
+      return res.status(400).json({ erro: 'Informe o nome da carteira.' });
+    }
 
-  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
-  const etiquetaFinal = etiqueta?.trim() || '';
-  const rendimentoFinal = rendimento?.trim() || '';
+    const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#3b82f6';
+    const etiquetaFinal = etiqueta?.trim() || '';
+    const rendimentoFinal = rendimento?.trim() || '';
 
-  const resultado = db
-    .prepare('UPDATE contas SET nome = ?, etiqueta = ?, rendimento = ?, cor = ? WHERE id = ? AND usuario_id = ?')
-    .run(nome.trim(), etiquetaFinal, rendimentoFinal, corFinal, id, req.usuario.id);
+    const resultado = await db.run(
+      'UPDATE contas SET nome = ?, etiqueta = ?, rendimento = ?, cor = ? WHERE id = ? AND usuario_id = ?',
+      nome.trim(),
+      etiquetaFinal,
+      rendimentoFinal,
+      corFinal,
+      id,
+      req.usuario.id
+    );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Carteira não encontrada.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Carteira não encontrada.' });
+    }
 
-  const atualizada = db
-    .prepare('SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ?')
-    .get(id);
+    const atualizada = await db.get(
+      'SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ?',
+      id
+    );
 
-  return res.json({ conta: atualizada });
-});
+    return res.json({ conta: atualizada });
+  })
+);
 
 // 13. Transferir dinheiro entre carteiras (não altera o Saldo Total — apenas move entre lugares!)
-app.post('/api/contas/transferir', autenticar, (req, res) => {
-  const origemId = Number(req.body.origemId);
-  const destinoId = Number(req.body.destinoId);
-  const valor = Number(req.body.valor);
+app.post(
+  '/api/contas/transferir',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const origemId = Number(req.body.origemId);
+    const destinoId = Number(req.body.destinoId);
+    const valor = Number(req.body.valor);
 
-  if (!Number.isInteger(origemId) || !Number.isInteger(destinoId) || origemId === destinoId) {
-    return res.status(400).json({ erro: 'Escolha duas carteiras diferentes para transferir.' });
-  }
-  if (!Number.isFinite(valor) || valor <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor maior que zero para transferir.' });
-  }
+    if (!Number.isInteger(origemId) || !Number.isInteger(destinoId) || origemId === destinoId) {
+      return res.status(400).json({ erro: 'Escolha duas carteiras diferentes para transferir.' });
+    }
+    if (!Number.isFinite(valor) || valor <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor maior que zero para transferir.' });
+    }
 
-  const origem = db
-    .prepare('SELECT id FROM contas WHERE id = ? AND usuario_id = ?')
-    .get(origemId, req.usuario.id);
-  const destino = db
-    .prepare('SELECT id FROM contas WHERE id = ? AND usuario_id = ?')
-    .get(destinoId, req.usuario.id);
-
-  if (!origem || !destino) {
-    return res.status(404).json({ erro: 'Carteira de origem ou destino não encontrada.' });
-  }
-
-  // Transação SQL: ou tira da origem E coloca no destino, ou nada muda!
-  db.exec('BEGIN');
-  try {
-    db.prepare('UPDATE contas SET saldo_ajuste = saldo_ajuste - ? WHERE id = ? AND usuario_id = ?').run(
-      valor,
+    const origem = await db.get(
+      'SELECT id FROM contas WHERE id = ? AND usuario_id = ?',
       origemId,
       req.usuario.id
     );
-    db.prepare('UPDATE contas SET saldo_ajuste = saldo_ajuste + ? WHERE id = ? AND usuario_id = ?').run(
-      valor,
+    const destino = await db.get(
+      'SELECT id FROM contas WHERE id = ? AND usuario_id = ?',
       destinoId,
       req.usuario.id
     );
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
 
-  return res.json({ ok: true });
-});
+    if (!origem || !destino) {
+      return res.status(404).json({ erro: 'Carteira de origem ou destino não encontrada.' });
+    }
+
+    // Transação SQL: ou tira da origem E coloca no destino, ou nada muda!
+    await db.transaction(async (tx) => {
+      await tx.run(
+        'UPDATE contas SET saldo_ajuste = saldo_ajuste - ? WHERE id = ? AND usuario_id = ?',
+        valor,
+        origemId,
+        req.usuario.id
+      );
+      await tx.run(
+        'UPDATE contas SET saldo_ajuste = saldo_ajuste + ? WHERE id = ? AND usuario_id = ?',
+        valor,
+        destinoId,
+        req.usuario.id
+      );
+    });
+
+    return res.json({ ok: true });
+  })
+);
 
 // 14. Excluir carteira (mantém todos os lançamentos intactos!)
-app.delete('/api/contas/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
+app.delete(
+  '/api/contas/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
 
-  const conta = db
-    .prepare('SELECT id, saldo_ajuste FROM contas WHERE id = ? AND usuario_id = ?')
-    .get(id, req.usuario.id);
+    const conta = await db.get(
+      'SELECT id, saldo_ajuste FROM contas WHERE id = ? AND usuario_id = ?',
+      id,
+      req.usuario.id
+    );
 
-  if (!conta) {
-    return res.status(404).json({ erro: 'Carteira não encontrada.' });
-  }
+    if (!conta) {
+      return res.status(404).json({ erro: 'Carteira não encontrada.' });
+    }
 
-  if (Math.abs(conta.saldo_ajuste) > 0.009) {
-    return res.status(400).json({
-      erro: 'Esta carteira possui transferências ativas. Transfira o valor de volta antes de excluí-la.',
+    if (Math.abs(conta.saldo_ajuste) > 0.009) {
+      return res.status(400).json({
+        erro: 'Esta carteira possui transferências ativas. Transfira o valor de volta antes de excluí-la.',
+      });
+    }
+
+    await db.transaction(async (tx) => {
+      await tx.run(
+        'UPDATE lancamentos SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?',
+        id,
+        req.usuario.id
+      );
+      await tx.run(
+        'UPDATE metas SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?',
+        id,
+        req.usuario.id
+      );
+      await tx.run(
+        'UPDATE despesas_fixas SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?',
+        id,
+        req.usuario.id
+      );
+      await tx.run(
+        'DELETE FROM contas WHERE id = ? AND usuario_id = ?',
+        id,
+        req.usuario.id
+      );
     });
-  }
 
-  db.exec('BEGIN');
-  try {
-    db.prepare('UPDATE lancamentos SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?').run(
-      id,
-      req.usuario.id
-    );
-    db.prepare('UPDATE metas SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?').run(
-      id,
-      req.usuario.id
-    );
-    db.prepare('UPDATE despesas_fixas SET conta_id = NULL WHERE conta_id = ? AND usuario_id = ?').run(
-      id,
-      req.usuario.id
-    );
-    db.prepare('DELETE FROM contas WHERE id = ? AND usuario_id = ?').run(id, req.usuario.id);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-
-  return res.json({ ok: true });
-});
+    return res.json({ ok: true });
+  })
+);
 
 // ============================================================================
 // ROTAS DE SALÁRIO FIXO RECORRENTE ("Previsto para Entrar")
@@ -730,7 +865,7 @@ function montarDataNoMes(ano, mes1a12, diaDesejado) {
  * se o dia de pagamento deste mês já passou OU já existe um salário recebido neste mês,
  * aponta para o próximo mês (ex.: em novembro -> "Salário de Dezembro").
  */
-function calcularProximoSalario(config, usuarioId) {
+async function calcularProximoSalario(config, usuarioId) {
   if (!config) return null;
 
   const hoje = new Date();
@@ -738,19 +873,19 @@ function calcularProximoSalario(config, usuarioId) {
   let mes = hoje.getMonth() + 1; // 1..12
   const diaHoje = hoje.getDate();
 
+  const sqlJaRecebeu = `
+    SELECT id FROM lancamentos
+    WHERE usuario_id = ?
+      AND tipo = 'entrada'
+      AND status = 'pago'
+      AND categoria = 'Salário'
+      AND substr(data, 1, 7) = ?
+    LIMIT 1
+  `;
+
   const mesAtualRef = `${ano}-${String(mes).padStart(2, '0')}`;
   const jaRecebeuMesAtual = Boolean(
-    db
-      .prepare(`
-        SELECT id FROM lancamentos
-        WHERE usuario_id = ?
-          AND tipo = 'entrada'
-          AND status = 'pago'
-          AND categoria = 'Salário'
-          AND substr(data, 1, 7) = ?
-        LIMIT 1
-      `)
-      .get(usuarioId, mesAtualRef)
+    await db.get(sqlJaRecebeu, usuarioId, mesAtualRef)
   );
 
   if (diaHoje > config.dia_pagamento || jaRecebeuMesAtual) {
@@ -765,19 +900,7 @@ function calcularProximoSalario(config, usuarioId) {
   let tentativas = 0;
   while (tentativas < 12) {
     const mesRef = `${ano}-${String(mes).padStart(2, '0')}`;
-    const jaRecebeu = Boolean(
-      db
-        .prepare(`
-          SELECT id FROM lancamentos
-          WHERE usuario_id = ?
-            AND tipo = 'entrada'
-            AND status = 'pago'
-            AND categoria = 'Salário'
-            AND substr(data, 1, 7) = ?
-          LIMIT 1
-        `)
-        .get(usuarioId, mesRef)
-    );
+    const jaRecebeu = Boolean(await db.get(sqlJaRecebeu, usuarioId, mesRef));
     if (!jaRecebeu) break;
     mes += 1;
     if (mes > 12) {
@@ -805,82 +928,102 @@ function calcularProximoSalario(config, usuarioId) {
 }
 
 // 15. Obter salário fixo configurado e o próximo mês previsto
-app.get('/api/salario', autenticar, (req, res) => {
-  const config = db
-    .prepare(`
-      SELECT s.valor, s.dia_pagamento, s.conta_id, c.nome AS conta_nome
-      FROM salario_fixo s
-      LEFT JOIN contas c ON c.id = s.conta_id AND c.usuario_id = s.usuario_id
-      WHERE s.usuario_id = ?
-    `)
-    .get(req.usuario.id);
+app.get(
+  '/api/salario',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const config = await db.get(
+      `
+        SELECT s.valor, s.dia_pagamento, s.conta_id, c.nome AS conta_nome
+        FROM salario_fixo s
+        LEFT JOIN contas c ON c.id = s.conta_id AND c.usuario_id = s.usuario_id
+        WHERE s.usuario_id = ?
+      `,
+      req.usuario.id
+    );
 
-  if (!config) {
-    return res.json({ salario: null, proximo: null });
-  }
+    if (!config) {
+      return res.json({ salario: null, proximo: null });
+    }
 
-  const proximo = calcularProximoSalario(config, req.usuario.id);
-  return res.json({
-    salario: {
-      valor: config.valor,
-      diaPagamento: config.dia_pagamento,
-      contaId: config.conta_id || null,
-      contaNome: config.conta_nome || null,
-    },
-    proximo,
-  });
-});
+    const proximo = await calcularProximoSalario(config, req.usuario.id);
+    return res.json({
+      salario: {
+        valor: config.valor,
+        diaPagamento: config.dia_pagamento,
+        contaId: config.conta_id || null,
+        contaNome: config.conta_nome || null,
+      },
+      proximo,
+    });
+  })
+);
 
-// 16. Criar ou atualizar salário fixo (UPSERT em SQL)
-app.put('/api/salario', autenticar, (req, res) => {
-  const valor = Number(req.body.valor);
-  const diaPagamento = Math.floor(Number(req.body.diaPagamento));
-  const contaIdFinal = resolverContaId(req.body.contaId, req.usuario.id);
+// 16. Criar ou atualizar salário fixo (UPSERT padrão SQL — funciona em SQLite e PostgreSQL!)
+app.put(
+  '/api/salario',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const valor = Number(req.body.valor);
+    const diaPagamento = Math.floor(Number(req.body.diaPagamento));
+    const contaIdFinal = await resolverContaId(req.body.contaId, req.usuario.id);
 
-  if (!Number.isFinite(valor) || valor <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor de salário maior que zero.' });
-  }
-  if (!Number.isInteger(diaPagamento) || diaPagamento < 1 || diaPagamento > 31) {
-    return res.status(400).json({ erro: 'Informe um dia de pagamento entre 1 e 31.' });
-  }
+    if (!Number.isFinite(valor) || valor <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor de salário maior que zero.' });
+    }
+    if (!Number.isInteger(diaPagamento) || diaPagamento < 1 || diaPagamento > 31) {
+      return res.status(400).json({ erro: 'Informe um dia de pagamento entre 1 e 31.' });
+    }
 
-  db.prepare(`
-    INSERT INTO salario_fixo (usuario_id, valor, dia_pagamento, conta_id, atualizado_em)
-    VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
-    ON CONFLICT(usuario_id) DO UPDATE SET
-      valor = excluded.valor,
-      dia_pagamento = excluded.dia_pagamento,
-      conta_id = excluded.conta_id,
-      atualizado_em = datetime('now', 'localtime')
-  `).run(req.usuario.id, valor, diaPagamento, contaIdFinal);
+    await db.run(
+      `
+        INSERT INTO salario_fixo (usuario_id, valor, dia_pagamento, conta_id, atualizado_em)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(usuario_id) DO UPDATE SET
+          valor = excluded.valor,
+          dia_pagamento = excluded.dia_pagamento,
+          conta_id = excluded.conta_id,
+          atualizado_em = CURRENT_TIMESTAMP
+      `,
+      req.usuario.id,
+      valor,
+      diaPagamento,
+      contaIdFinal
+    );
 
-  const config = db
-    .prepare(`
-      SELECT s.valor, s.dia_pagamento, s.conta_id, c.nome AS conta_nome
-      FROM salario_fixo s
-      LEFT JOIN contas c ON c.id = s.conta_id AND c.usuario_id = s.usuario_id
-      WHERE s.usuario_id = ?
-    `)
-    .get(req.usuario.id);
+    const config = await db.get(
+      `
+        SELECT s.valor, s.dia_pagamento, s.conta_id, c.nome AS conta_nome
+        FROM salario_fixo s
+        LEFT JOIN contas c ON c.id = s.conta_id AND c.usuario_id = s.usuario_id
+        WHERE s.usuario_id = ?
+      `,
+      req.usuario.id
+    );
 
-  const proximo = calcularProximoSalario(config, req.usuario.id);
+    const proximo = await calcularProximoSalario(config, req.usuario.id);
 
-  return res.json({
-    salario: {
-      valor: config.valor,
-      diaPagamento: config.dia_pagamento,
-      contaId: config.conta_id || null,
-      contaNome: config.conta_nome || null,
-    },
-    proximo,
-  });
-});
+    return res.json({
+      salario: {
+        valor: config.valor,
+        diaPagamento: config.dia_pagamento,
+        contaId: config.conta_id || null,
+        contaNome: config.conta_nome || null,
+      },
+      proximo,
+    });
+  })
+);
 
 // 17. Remover salário fixo
-app.delete('/api/salario', autenticar, (req, res) => {
-  db.prepare('DELETE FROM salario_fixo WHERE usuario_id = ?').run(req.usuario.id);
-  return res.json({ ok: true });
-});
+app.delete(
+  '/api/salario',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    await db.run('DELETE FROM salario_fixo WHERE usuario_id = ?', req.usuario.id);
+    return res.json({ ok: true });
+  })
+);
 
 // ============================================================================
 // ROTAS DE METAS FINANCEIRAS (Objetivos de Economia)
@@ -897,58 +1040,65 @@ const SELECT_META_BASE = `
 `;
 
 // 18. Listar todas as metas do usuário logado
-app.get('/api/metas', autenticar, (req, res) => {
-  const metas = db
-    .prepare(`
-      ${SELECT_META_BASE}
-      WHERE m.usuario_id = ?
-      ORDER BY m.id DESC
-    `)
-    .all(req.usuario.id);
+app.get(
+  '/api/metas',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const metas = await db.all(
+      `
+        ${SELECT_META_BASE}
+        WHERE m.usuario_id = ?
+        ORDER BY m.id DESC
+      `,
+      req.usuario.id
+    );
 
-  return res.json({ metas });
-});
+    return res.json({ metas });
+  })
+);
 
 // 19. Criar nova meta financeira
-app.post('/api/metas', autenticar, (req, res) => {
-  const { titulo, valorAlvo, valorAtual, prazo, cor, contaId, observacao } = req.body;
+app.post(
+  '/api/metas',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const { titulo, valorAlvo, valorAtual, prazo, cor, contaId, observacao } = req.body;
 
-  const alvoNum = Number(valorAlvo);
-  const atualNum =
-    valorAtual === undefined || valorAtual === null || valorAtual === ''
-      ? 0
-      : Number(valorAtual);
+    const alvoNum = Number(valorAlvo);
+    const atualNum =
+      valorAtual === undefined || valorAtual === null || valorAtual === ''
+        ? 0
+        : Number(valorAtual);
 
-  if (!titulo?.trim()) {
-    return res.status(400).json({ erro: 'Informe um nome para a meta (ex.: Reserva de emergência).' });
-  }
-  if (!Number.isFinite(alvoNum) || alvoNum <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor alvo maior que zero.' });
-  }
-  if (!Number.isFinite(atualNum) || atualNum < 0) {
-    return res.status(400).json({ erro: 'O valor já guardado não pode ser negativo.' });
-  }
-
-  let prazoFinal = null;
-  if (prazo && String(prazo).trim() !== '') {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(prazo).trim())) {
-      return res.status(400).json({ erro: 'Informe uma data de prazo válida (AAAA-MM-DD).' });
+    if (!titulo?.trim()) {
+      return res.status(400).json({ erro: 'Informe um nome para a meta (ex.: Reserva de emergência).' });
     }
-    prazoFinal = String(prazo).trim();
-  }
+    if (!Number.isFinite(alvoNum) || alvoNum <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor alvo maior que zero.' });
+    }
+    if (!Number.isFinite(atualNum) || atualNum < 0) {
+      return res.status(400).json({ erro: 'O valor já guardado não pode ser negativo.' });
+    }
 
-  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#22c55e';
-  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
-  const observacaoFinal = observacao?.trim() || '';
+    let prazoFinal = null;
+    if (prazo && String(prazo).trim() !== '') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(prazo).trim())) {
+        return res.status(400).json({ erro: 'Informe uma data de prazo válida (AAAA-MM-DD).' });
+      }
+      prazoFinal = String(prazo).trim();
+    }
 
-  const resultado = db
-    .prepare(`
-      INSERT INTO metas (
-        usuario_id, titulo, valor_alvo, valor_atual, prazo, cor, conta_id, observacao
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    .run(
+    const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#22c55e';
+    const contaIdFinal = await resolverContaId(contaId, req.usuario.id);
+    const observacaoFinal = observacao?.trim() || '';
+
+    const novoId = await db.insert(
+      `
+        INSERT INTO metas (
+          usuario_id, titulo, valor_alvo, valor_atual, prazo, cor, conta_id, observacao
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
       req.usuario.id,
       titulo.trim(),
       alvoNum,
@@ -959,54 +1109,55 @@ app.post('/api/metas', autenticar, (req, res) => {
       observacaoFinal
     );
 
-  const criada = db
-    .prepare(`${SELECT_META_BASE} WHERE m.id = ?`)
-    .get(Number(resultado.lastInsertRowid));
+    const criada = await db.get(`${SELECT_META_BASE} WHERE m.id = ?`, novoId);
 
-  return res.status(201).json({ meta: criada });
-});
+    return res.status(201).json({ meta: criada });
+  })
+);
 
 // 20. Editar uma meta existente
-app.put('/api/metas/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
-  const { titulo, valorAlvo, valorAtual, prazo, cor, contaId, observacao } = req.body;
+app.put(
+  '/api/metas/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { titulo, valorAlvo, valorAtual, prazo, cor, contaId, observacao } = req.body;
 
-  const alvoNum = Number(valorAlvo);
-  const atualNum =
-    valorAtual === undefined || valorAtual === null || valorAtual === ''
-      ? 0
-      : Number(valorAtual);
+    const alvoNum = Number(valorAlvo);
+    const atualNum =
+      valorAtual === undefined || valorAtual === null || valorAtual === ''
+        ? 0
+        : Number(valorAtual);
 
-  if (!titulo?.trim()) {
-    return res.status(400).json({ erro: 'Informe um nome para a meta.' });
-  }
-  if (!Number.isFinite(alvoNum) || alvoNum <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor alvo maior que zero.' });
-  }
-  if (!Number.isFinite(atualNum) || atualNum < 0) {
-    return res.status(400).json({ erro: 'O valor já guardado não pode ser negativo.' });
-  }
-
-  let prazoFinal = null;
-  if (prazo && String(prazo).trim() !== '') {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(prazo).trim())) {
-      return res.status(400).json({ erro: 'Informe uma data de prazo válida (AAAA-MM-DD).' });
+    if (!titulo?.trim()) {
+      return res.status(400).json({ erro: 'Informe um nome para a meta.' });
     }
-    prazoFinal = String(prazo).trim();
-  }
+    if (!Number.isFinite(alvoNum) || alvoNum <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor alvo maior que zero.' });
+    }
+    if (!Number.isFinite(atualNum) || atualNum < 0) {
+      return res.status(400).json({ erro: 'O valor já guardado não pode ser negativo.' });
+    }
 
-  const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#22c55e';
-  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
-  const observacaoFinal = observacao?.trim() || '';
+    let prazoFinal = null;
+    if (prazo && String(prazo).trim() !== '') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(prazo).trim())) {
+        return res.status(400).json({ erro: 'Informe uma data de prazo válida (AAAA-MM-DD).' });
+      }
+      prazoFinal = String(prazo).trim();
+    }
 
-  const resultado = db
-    .prepare(`
-      UPDATE metas
-      SET titulo = ?, valor_alvo = ?, valor_atual = ?, prazo = ?,
-          cor = ?, conta_id = ?, observacao = ?
-      WHERE id = ? AND usuario_id = ?
-    `)
-    .run(
+    const corFinal = /^#[0-9a-fA-F]{6}$/.test(cor || '') ? cor : '#22c55e';
+    const contaIdFinal = await resolverContaId(contaId, req.usuario.id);
+    const observacaoFinal = observacao?.trim() || '';
+
+    const resultado = await db.run(
+      `
+        UPDATE metas
+        SET titulo = ?, valor_alvo = ?, valor_atual = ?, prazo = ?,
+            cor = ?, conta_id = ?, observacao = ?
+        WHERE id = ? AND usuario_id = ?
+      `,
       titulo.trim(),
       alvoNum,
       atualNum,
@@ -1018,64 +1169,83 @@ app.put('/api/metas/:id', autenticar, (req, res) => {
       req.usuario.id
     );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Meta não encontrada.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Meta não encontrada.' });
+    }
 
-  const atualizada = db.prepare(`${SELECT_META_BASE} WHERE m.id = ?`).get(id);
-  return res.json({ meta: atualizada });
-});
+    const atualizada = await db.get(`${SELECT_META_BASE} WHERE m.id = ?`, id);
+    return res.json({ meta: atualizada });
+  })
+);
 
-// 21. Registrar aporte ou retirada rápida em uma meta manual (atualização atômica em SQL)
-app.patch('/api/metas/:id/aportar', autenticar, (req, res) => {
-  const id = Number(req.params.id);
-  const valor = Number(req.body.valor);
-  const operacao = req.body.operacao === 'retirar' ? 'retirar' : 'aportar';
+// 21. Registrar aporte ou retirada rápida em uma meta manual (SQL padrão ANSI compatível com SQLite e PostgreSQL)
+app.patch(
+  '/api/metas/:id/aportar',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const valor = Number(req.body.valor);
+    const operacao = req.body.operacao === 'retirar' ? 'retirar' : 'aportar';
 
-  if (!Number.isFinite(valor) || valor <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
-  }
+    if (!Number.isFinite(valor) || valor <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor maior que zero.' });
+    }
 
-  const metaAtual = db
-    .prepare('SELECT id, conta_id FROM metas WHERE id = ? AND usuario_id = ?')
-    .get(id, req.usuario.id);
+    const metaAtual = await db.get(
+      'SELECT id, conta_id FROM metas WHERE id = ? AND usuario_id = ?',
+      id,
+      req.usuario.id
+    );
 
-  if (!metaAtual) {
-    return res.status(404).json({ erro: 'Meta não encontrada.' });
-  }
+    if (!metaAtual) {
+      return res.status(404).json({ erro: 'Meta não encontrada.' });
+    }
 
-  if (metaAtual.conta_id) {
-    return res.status(400).json({
-      erro: 'Esta meta acompanha uma carteira automaticamente. Faça uma transferência para essa carteira na aba Entradas.',
-    });
-  }
+    if (metaAtual.conta_id) {
+      return res.status(400).json({
+        erro: 'Esta meta acompanha uma carteira automaticamente. Faça uma transferência para essa carteira na aba Entradas.',
+      });
+    }
 
-  const delta = operacao === 'retirar' ? -valor : valor;
+    const delta = operacao === 'retirar' ? -valor : valor;
 
-  db.prepare(`
-    UPDATE metas
-    SET valor_atual = ROUND(MAX(0, valor_atual + ?), 2)
-    WHERE id = ? AND usuario_id = ?
-  `).run(delta, id, req.usuario.id);
+    await db.run(
+      `
+        UPDATE metas
+        SET valor_atual = ROUND((CASE WHEN valor_atual + ? < 0 THEN 0 ELSE valor_atual + ? END) * 100) / 100.0
+        WHERE id = ? AND usuario_id = ?
+      `,
+      delta,
+      delta,
+      id,
+      req.usuario.id
+    );
 
-  const atualizada = db.prepare(`${SELECT_META_BASE} WHERE m.id = ?`).get(id);
-  return res.json({ meta: atualizada });
-});
+    const atualizada = await db.get(`${SELECT_META_BASE} WHERE m.id = ?`, id);
+    return res.json({ meta: atualizada });
+  })
+);
 
 // 22. Excluir uma meta
-app.delete('/api/metas/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
+app.delete(
+  '/api/metas/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
 
-  const resultado = db
-    .prepare('DELETE FROM metas WHERE id = ? AND usuario_id = ?')
-    .run(id, req.usuario.id);
+    const resultado = await db.run(
+      'DELETE FROM metas WHERE id = ? AND usuario_id = ?',
+      id,
+      req.usuario.id
+    );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Meta não encontrada.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Meta não encontrada.' });
+    }
 
-  return res.json({ ok: true });
-});
+    return res.json({ ok: true });
+  })
+);
 
 // ============================================================================
 // ROTAS DE DESPESAS FIXAS MENSAIS (Recorrentes na aba Saídas e Estatísticas)
@@ -1092,46 +1262,53 @@ const SELECT_DESPESA_FIXA_BASE = `
 `;
 
 // 23. Listar despesas fixas mensais do usuário
-app.get('/api/despesas-fixas', autenticar, (req, res) => {
-  const despesas = db
-    .prepare(`
-      ${SELECT_DESPESA_FIXA_BASE}
-      WHERE d.usuario_id = ?
-      ORDER BY d.ativa DESC, d.dia_vencimento ASC, d.id ASC
-    `)
-    .all(req.usuario.id);
+app.get(
+  '/api/despesas-fixas',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const despesas = await db.all(
+      `
+        ${SELECT_DESPESA_FIXA_BASE}
+        WHERE d.usuario_id = ?
+        ORDER BY d.ativa DESC, d.dia_vencimento ASC, d.id ASC
+      `,
+      req.usuario.id
+    );
 
-  return res.json({ despesas });
-});
+    return res.json({ despesas });
+  })
+);
 
 // 24. Criar nova despesa fixa mensal
-app.post('/api/despesas-fixas', autenticar, (req, res) => {
-  const { titulo, valor, diaVencimento, categoria, contaId } = req.body;
+app.post(
+  '/api/despesas-fixas',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const { titulo, valor, diaVencimento, categoria, contaId } = req.body;
 
-  const valorNum = Number(valor);
-  const diaNum = Math.floor(Number(diaVencimento));
+    const valorNum = Number(valor);
+    const diaNum = Math.floor(Number(diaVencimento));
 
-  if (!titulo?.trim()) {
-    return res.status(400).json({ erro: 'Informe o nome da despesa fixa (ex.: Internet, Academia).' });
-  }
-  if (!Number.isFinite(valorNum) || valorNum <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor mensal maior que zero.' });
-  }
-  if (!Number.isInteger(diaNum) || diaNum < 1 || diaNum > 31) {
-    return res.status(400).json({ erro: 'Informe um dia de vencimento entre 1 e 31.' });
-  }
+    if (!titulo?.trim()) {
+      return res.status(400).json({ erro: 'Informe o nome da despesa fixa (ex.: Internet, Academia).' });
+    }
+    if (!Number.isFinite(valorNum) || valorNum <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor mensal maior que zero.' });
+    }
+    if (!Number.isInteger(diaNum) || diaNum < 1 || diaNum > 31) {
+      return res.status(400).json({ erro: 'Informe um dia de vencimento entre 1 e 31.' });
+    }
 
-  const categoriaFinal = categoria?.trim() || 'Moradia';
-  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
+    const categoriaFinal = categoria?.trim() || 'Moradia';
+    const contaIdFinal = await resolverContaId(contaId, req.usuario.id);
 
-  const resultado = db
-    .prepare(`
-      INSERT INTO despesas_fixas (
-        usuario_id, titulo, valor, dia_vencimento, categoria, conta_id, ativa
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 1)
-    `)
-    .run(
+    const novoId = await db.insert(
+      `
+        INSERT INTO despesas_fixas (
+          usuario_id, titulo, valor, dia_vencimento, categoria, conta_id, ativa
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+      `,
       req.usuario.id,
       titulo.trim(),
       valorNum,
@@ -1140,42 +1317,43 @@ app.post('/api/despesas-fixas', autenticar, (req, res) => {
       contaIdFinal
     );
 
-  const criada = db
-    .prepare(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`)
-    .get(Number(resultado.lastInsertRowid));
+    const criada = await db.get(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`, novoId);
 
-  return res.status(201).json({ despesa: criada });
-});
+    return res.status(201).json({ despesa: criada });
+  })
+);
 
 // 25. Editar despesa fixa mensal
-app.put('/api/despesas-fixas/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
-  const { titulo, valor, diaVencimento, categoria, contaId, ativa } = req.body;
+app.put(
+  '/api/despesas-fixas/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { titulo, valor, diaVencimento, categoria, contaId, ativa } = req.body;
 
-  const valorNum = Number(valor);
-  const diaNum = Math.floor(Number(diaVencimento));
+    const valorNum = Number(valor);
+    const diaNum = Math.floor(Number(diaVencimento));
 
-  if (!titulo?.trim()) {
-    return res.status(400).json({ erro: 'Informe o nome da despesa fixa.' });
-  }
-  if (!Number.isFinite(valorNum) || valorNum <= 0) {
-    return res.status(400).json({ erro: 'Informe um valor mensal maior que zero.' });
-  }
-  if (!Number.isInteger(diaNum) || diaNum < 1 || diaNum > 31) {
-    return res.status(400).json({ erro: 'Informe um dia de vencimento entre 1 e 31.' });
-  }
+    if (!titulo?.trim()) {
+      return res.status(400).json({ erro: 'Informe o nome da despesa fixa.' });
+    }
+    if (!Number.isFinite(valorNum) || valorNum <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor mensal maior que zero.' });
+    }
+    if (!Number.isInteger(diaNum) || diaNum < 1 || diaNum > 31) {
+      return res.status(400).json({ erro: 'Informe um dia de vencimento entre 1 e 31.' });
+    }
 
-  const categoriaFinal = categoria?.trim() || 'Moradia';
-  const contaIdFinal = resolverContaId(contaId, req.usuario.id);
-  const ativaFinal = ativa === false || ativa === 0 ? 0 : 1;
+    const categoriaFinal = categoria?.trim() || 'Moradia';
+    const contaIdFinal = await resolverContaId(contaId, req.usuario.id);
+    const ativaFinal = ativa === false || ativa === 0 ? 0 : 1;
 
-  const resultado = db
-    .prepare(`
-      UPDATE despesas_fixas
-      SET titulo = ?, valor = ?, dia_vencimento = ?, categoria = ?, conta_id = ?, ativa = ?
-      WHERE id = ? AND usuario_id = ?
-    `)
-    .run(
+    const resultado = await db.run(
+      `
+        UPDATE despesas_fixas
+        SET titulo = ?, valor = ?, dia_vencimento = ?, categoria = ?, conta_id = ?, ativa = ?
+        WHERE id = ? AND usuario_id = ?
+      `,
       titulo.trim(),
       valorNum,
       diaNum,
@@ -1186,45 +1364,59 @@ app.put('/api/despesas-fixas/:id', autenticar, (req, res) => {
       req.usuario.id
     );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
+    }
 
-  const atualizada = db.prepare(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`).get(id);
-  return res.json({ despesa: atualizada });
-});
+    const atualizada = await db.get(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`, id);
+    return res.json({ despesa: atualizada });
+  })
+);
 
 // 26. Pausar ou reativar uma despesa fixa mensal
-app.patch('/api/despesas-fixas/:id/ativa', autenticar, (req, res) => {
-  const id = Number(req.params.id);
-  const ativaFinal = req.body.ativa ? 1 : 0;
+app.patch(
+  '/api/despesas-fixas/:id/ativa',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const ativaFinal = req.body.ativa ? 1 : 0;
 
-  const resultado = db
-    .prepare('UPDATE despesas_fixas SET ativa = ? WHERE id = ? AND usuario_id = ?')
-    .run(ativaFinal, id, req.usuario.id);
+    const resultado = await db.run(
+      'UPDATE despesas_fixas SET ativa = ? WHERE id = ? AND usuario_id = ?',
+      ativaFinal,
+      id,
+      req.usuario.id
+    );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
+    }
 
-  const atualizada = db.prepare(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`).get(id);
-  return res.json({ despesa: atualizada });
-});
+    const atualizada = await db.get(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`, id);
+    return res.json({ despesa: atualizada });
+  })
+);
 
 // 27. Excluir uma despesa fixa mensal
-app.delete('/api/despesas-fixas/:id', autenticar, (req, res) => {
-  const id = Number(req.params.id);
+app.delete(
+  '/api/despesas-fixas/:id',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
 
-  const resultado = db
-    .prepare('DELETE FROM despesas_fixas WHERE id = ? AND usuario_id = ?')
-    .run(id, req.usuario.id);
+    const resultado = await db.run(
+      'DELETE FROM despesas_fixas WHERE id = ? AND usuario_id = ?',
+      id,
+      req.usuario.id
+    );
 
-  if (resultado.changes === 0) {
-    return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
-  }
+    if (resultado.changes === 0) {
+      return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
+    }
 
-  return res.json({ ok: true });
-});
+    return res.json({ ok: true });
+  })
+);
 
 // Serve o Frontend React compilado (frontend/dist) se existir, permitindo rodar tudo em 1 único servidor
 const frontendDist = path.join(__dirname, '..', '..', 'frontend', 'dist');
@@ -1232,7 +1424,11 @@ if (fs.existsSync(frontendDist)) {
   app.use(
     express.static(frontendDist, {
       setHeaders: (res, filePath) => {
-        if (filePath.endsWith('index.html')) {
+        if (
+          filePath.endsWith('index.html') ||
+          filePath.endsWith('sw.js') ||
+          filePath.endsWith('manifest.json')
+        ) {
           res.setHeader('Cache-Control', 'no-store');
         }
       },
@@ -1245,6 +1441,31 @@ if (fs.existsSync(frontendDist)) {
   });
 }
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
+// Tratador global de erros: evita vazar detalhes internos do banco/código para o navegador
+app.use((err, _req, res, _next) => {
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ erro: 'Formato JSON inválido na requisição.' });
+  }
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ erro: 'Requisição grande demais.' });
+  }
+  if (err?.status === 403) {
+    return res.status(403).json({ erro: err.message || 'Acesso bloqueado.' });
+  }
+
+  console.error('Erro inesperado na API:', err);
+  return res.status(500).json({ erro: 'Erro interno do servidor. Tente novamente.' });
 });
+
+initDb()
+  .then(() => {
+    app.listen(PORT, HOST, () => {
+      console.log(
+        `Servidor rodando em http://${HOST}:${PORT} (${IS_PROD ? 'produção' : 'desenvolvimento'} • banco: ${dbType})`
+      );
+    });
+  })
+  .catch((err) => {
+    console.error('Falha ao inicializar o banco de dados:', err);
+    process.exit(1);
+  });

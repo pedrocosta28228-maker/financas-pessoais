@@ -53,9 +53,11 @@ financeiro/
 - [x] Aba de Estatísticas com projeção de saldo (12 meses), queda das dívidas × salário e mês previsto de quitação
 - [x] Aba de Metas financeiras com barra de progresso, aportes/retiradas atômicas e sincronização opcional com carteiras
 - [x] Tema Claro (padrão) e Modo Escuro grafite com botão Lua/Sol no topo, tipografia *Plus Jakarta Sans* e tooltips `?`
-- [x] Testes automatizados do backend com `node --test`
+- [x] Blindagem de produção (`helmet`, `express-rate-limit`, CORS restrito, Fail-Fast em `JWT_SECRET`, tratador global de erros)
+- [x] Adapter de banco duplo: **SQLite local** no PC e **PostgreSQL na nuvem (Neon.tech)** automático via `DATABASE_URL`
+- [x] Pronto para deploy gratuito no **Render.com** (`render.yaml` + `package.json` raiz) e instalação como **PWA** no celular
+- [x] Testes automatizados do backend com `node --test` (8/8 passando)
 
 ## Próximos Passos (Futuro — v3)
 - [ ] **Perfil do Usuário & Central de Ajuda:** dados da conta, troca de senha, backup/exportação (`CSV` / `JSON`) e guia de uso do sistema
 - [ ] **Automação bancária:** importação de extratos/faturas (`CSV` / `OFX`) ou integração com Open Finance (ex.: Pluggy / Belvo)
-- [ ] **Versão Mobile (PWA) & Deploy na internet:** blindagem de produção (`helmet`, rate limit, CORS restrito, HTTPS) para instalar e usar direto no celular

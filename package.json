@@ -1,0 +1,14 @@
+{
+  "name": "financas-pessoais",
+  "version": "2.0.0",
+  "private": true,
+  "description": "App Web & PWA de Finanças Pessoais (React + Node.js + SQLite/PostgreSQL)",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "npm --prefix backend install && npm --prefix frontend install && npm --prefix frontend run build",
+    "start": "npm --prefix backend start",
+    "test": "npm --prefix backend test"
+  }
+}

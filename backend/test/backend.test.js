@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { hashSenha, verificarSenha, gerarToken } from '../src/auth.js';
+import { resolverJwtSecret, validarEmail, criarOpcoesCors } from '../src/security.js';
+import { traduzirPlaceholdersPg } from '../src/db.js';
 
 test('hashSenha gera hash irreversível e verificarSenha valida corretamente', () => {
   const senhaOriginal = 'minhaSenhaForte123';
@@ -312,4 +314,62 @@ test('SQLite (Despesas Fixas): CHECK dia 1..31, pausar/reativar, FK conta e isol
     db.close();
     fs.rmSync(tempDb, { force: true });
   }
+});
+
+test('Segurança (Fail-Fast): rejeita JWT_SECRET fraco ou ausente em produção', () => {
+  assert.throws(() => resolverJwtSecret({ envSecret: '', nodeEnv: 'production' }));
+  assert.throws(() => resolverJwtSecret({ envSecret: 'curto123', nodeEnv: 'production' }));
+  assert.throws(() =>
+    resolverJwtSecret({ envSecret: 'segredo-local-desenvolvimento', nodeEnv: 'production' })
+  );
+
+  const chaveForte = 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0';
+  assert.equal(
+    resolverJwtSecret({ envSecret: chaveForte, nodeEnv: 'production' }),
+    chaveForte
+  );
+
+  // Em desenvolvimento continua funcionando localmente
+  assert.ok(resolverJwtSecret({ envSecret: '', nodeEnv: 'development' }).length > 0);
+});
+
+test('Segurança (Validação e CORS): valida e-mail e bloqueia origens desconhecidas em produção', () => {
+  assert.equal(validarEmail('pedro@teste.dev'), true);
+  assert.equal(validarEmail('pedro.costa@alunos.ufersa.edu.br'), true);
+  assert.equal(validarEmail('nao-eh-email'), false);
+  assert.equal(validarEmail(`${'a'.repeat(120)}@teste.com`), false);
+
+  const corsProd = criarOpcoesCors({
+    frontendUrl: 'https://financas-pedro.onrender.com/',
+    nodeEnv: 'production',
+  });
+
+  // Mesma origem (sem Origin) -> liberado
+  corsProd.origin(undefined, (err, permitido) => {
+    assert.equal(err, null);
+    assert.equal(permitido, true);
+  });
+
+  // Domínio oficial -> liberado
+  corsProd.origin('https://financas-pedro.onrender.com', (err, permitido) => {
+    assert.equal(err, null);
+    assert.equal(permitido, true);
+  });
+
+  // Domínio malicioso externo -> bloqueado (403)
+  corsProd.origin('https://site-invasor.xyz', (err, permitido) => {
+    assert.ok(err instanceof Error);
+    assert.equal(err.status, 403);
+    assert.equal(permitido, undefined);
+  });
+});
+
+test('PostgreSQL adapter: traduzirPlaceholdersPg converte ? em $1, $2... ignorando literais de texto', () => {
+  const sql =
+    "UPDATE lancamentos SET titulo = ?, observacao = 'Pago?' WHERE id = ? AND usuario_id = ?";
+  const traduzido = traduzirPlaceholdersPg(sql);
+  assert.equal(
+    traduzido,
+    "UPDATE lancamentos SET titulo = $1, observacao = 'Pago?' WHERE id = $2 AND usuario_id = $3"
+  );
 });

@@ -1,0 +1,16 @@
+# Blueprint de deploy gratuito no Render.com (Infrastructure as Code)
+services:
+  - type: web
+    name: financas-pessoais
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false

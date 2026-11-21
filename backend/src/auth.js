@@ -1,7 +1,9 @@
+import 'dotenv/config';
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import { resolverJwtSecret } from './security.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'segredo-local-desenvolvimento';
+const JWT_SECRET = resolverJwtSecret();
 
 /**
  * Transforma uma senha em texto puro em um hash criptográfico seguro (scrypt + salt aleatório).
