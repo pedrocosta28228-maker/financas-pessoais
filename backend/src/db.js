@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -22,7 +21,6 @@ export function traduzirPlaceholdersPg(sql) {
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
     if (ch === "'") {
-      // Trata aspas escapadas '' dentro de string SQL
       if (dentroDeTexto && sql[i + 1] === "'") {
         resultado += "''";
         i += 1;
@@ -46,19 +44,7 @@ export const dbType = DATABASE_URL ? 'postgres' : 'sqlite';
 
 let sqliteDb = null;
 let pgPool = null;
-
-if (dbType === 'postgres') {
-  const ehLocal =
-    DATABASE_URL.includes('localhost') || DATABASE_URL.includes('127.0.0.1');
-
-  pgPool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: ehLocal ? false : { rejectUnauthorized: false },
-  });
-} else {
-  sqliteDb = new DatabaseSync(sqlitePath);
-  sqliteDb.exec('PRAGMA foreign_keys = ON;');
-}
+let executorAtual = null;
 
 function criarExecutorPg(runner) {
   return {
@@ -103,20 +89,37 @@ function criarExecutorSqlite(conn) {
   };
 }
 
-const baseExecutor =
-  dbType === 'postgres' ? criarExecutorPg(pgPool) : criarExecutorSqlite(sqliteDb);
+function garantirInicializado() {
+  if (!executorAtual) {
+    throw new Error('Banco de dados ainda não foi inicializado. Chame initDb() antes.');
+  }
+  return executorAtual;
+}
 
 /**
  * Interface unificada assíncrona do banco de dados:
  * funciona tanto em SQLite local (seu PC) quanto em PostgreSQL na nuvem (Neon/Render).
  */
 export const db = {
-  ...baseExecutor,
+  get(sql, ...params) {
+    return garantirInicializado().get(sql, ...params);
+  },
+  all(sql, ...params) {
+    return garantirInicializado().all(sql, ...params);
+  },
+  run(sql, ...params) {
+    return garantirInicializado().run(sql, ...params);
+  },
+  insert(sql, ...params) {
+    return garantirInicializado().insert(sql, ...params);
+  },
 
   /**
    * Executa um bloco de queries dentro de uma Transação SQL (tudo ou nada).
    */
   async transaction(fn) {
+    garantirInicializado();
+
     if (dbType === 'postgres') {
       const client = await pgPool.connect();
       try {
@@ -145,10 +148,23 @@ export const db = {
 };
 
 /**
- * Cria todas as 6 tabelas SQL (se ainda não existirem) e aplica migrações seguras no SQLite local.
+ * Inicializa a conexão (PostgreSQL na nuvem ou SQLite local sob demanda)
+ * e cria todas as 6 tabelas SQL caso ainda não existam.
  */
 export async function initDb() {
   if (dbType === 'postgres') {
+    if (!pgPool) {
+      const ehLocal =
+        DATABASE_URL.includes('localhost') || DATABASE_URL.includes('127.0.0.1');
+
+      pgPool = new Pool({
+        connectionString: DATABASE_URL,
+        ssl: ehLocal ? false : { rejectUnauthorized: false },
+      });
+    }
+
+    executorAtual = criarExecutorPg(pgPool);
+
     await pgPool.query(`
       CREATE TABLE IF NOT EXISTS usuarios (
         id SERIAL PRIMARY KEY,
@@ -224,7 +240,16 @@ export async function initDb() {
     return;
   }
 
-  // SQLite local (desenvolvimento no seu computador)
+  // Importação dinâmica: "node:sqlite" só é carregado no modo local,
+  // evitando incompatibilidade caso a nuvem rode uma versão anterior do Node.js.
+  if (!sqliteDb) {
+    const { DatabaseSync } = await import('node:sqlite');
+    sqliteDb = new DatabaseSync(sqlitePath);
+    sqliteDb.exec('PRAGMA foreign_keys = ON;');
+  }
+
+  executorAtual = criarExecutorSqlite(sqliteDb);
+
   sqliteDb.exec(`
     CREATE TABLE IF NOT EXISTS usuarios (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
