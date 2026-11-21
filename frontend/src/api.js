@@ -66,6 +66,18 @@ export const api = {
 
   me: () => requisicao('/auth/me'),
 
+  atualizarPerfil: (dados) =>
+    requisicao('/auth/perfil', {
+      method: 'PUT',
+      body: JSON.stringify(dados),
+    }),
+
+  alterarSenha: (senhaAtual, novaSenha) =>
+    requisicao('/auth/senha', {
+      method: 'PUT',
+      body: JSON.stringify({ senhaAtual, novaSenha }),
+    }),
+
   listarLancamentos: (mes) =>
     requisicao(mes ? `/lancamentos?mes=${encodeURIComponent(mes)}` : '/lancamentos'),
 
@@ -85,6 +97,12 @@ export const api = {
     requisicao(`/lancamentos/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status, ...opcoes }),
+    }),
+
+  atualizarGrupoParcelas: (grupoId, dados) =>
+    requisicao(`/lancamentos/grupo/${encodeURIComponent(grupoId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(dados),
     }),
 
   excluirGrupoParcelas: (grupoId) =>

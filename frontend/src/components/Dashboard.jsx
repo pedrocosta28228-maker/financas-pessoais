@@ -9,10 +9,14 @@ import EstatisticasView from './EstatisticasView.jsx';
 import MetasView from './MetasView.jsx';
 import ListaLancamentos, { agruparLancamentos } from './ListaLancamentos.jsx';
 import NovoLancamentoModal from './NovoLancamentoModal.jsx';
+import EditarGrupoModal from './EditarGrupoModal.jsx';
 import ConfirmarPagamentoModal from './ConfirmarPagamentoModal.jsx';
 import ConfirmarExclusaoModal from './ConfirmarExclusaoModal.jsx';
 import SalarioModal from './SalarioModal.jsx';
 import InfoTip from './InfoTip.jsx';
+import PerfilDrawer, { obterIniciais } from './PerfilDrawer.jsx';
+import MinhaContaView from './MinhaContaView.jsx';
+import AjudaView from './AjudaView.jsx';
 
 const NOMES_MESES = [
   'Janeiro',
@@ -53,6 +57,14 @@ const TITULOS_SECAO = {
   metas: {
     titulo: 'Metas',
     subtitulo: 'Defina seus objetivos de economia e acompanhe cada conquista',
+  },
+  minha_conta: {
+    titulo: 'Minha conta',
+    subtitulo: 'Gerencie seus dados de perfil, altere sua senha e baixe backups',
+  },
+  ajuda: {
+    titulo: 'Central de ajuda',
+    subtitulo: 'Guia rápido de como aproveitar cada recurso do Minhas Finanças',
   },
 };
 
@@ -128,11 +140,18 @@ function calcularSalarioExibido(mesSelecionado, salarioConfig, proximoReal) {
   };
 }
 
-export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
+export default function Dashboard({
+  usuario,
+  onUsuarioAtualizado,
+  onSair,
+  tema,
+  onAlternarTema,
+}) {
   const primeiroNome = (usuario.nome || '').trim().split(/\s+/)[0] || usuario.nome;
   const chaveNovasDividas = `financeiro_dividas_novas_${usuario.id}`;
 
   const [secaoAtiva, setSecaoAtiva] = useState('visao_geral');
+  const [perfilAberto, setPerfilAberto] = useState(false);
   const [sidebarRecolhida, setSidebarRecolhida] = useState(() => {
     return localStorage.getItem('financeiro_sidebar_recolhida') === 'true';
   });
@@ -175,6 +194,7 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
   const [modalAberto, setModalAberto] = useState(false);
   const [tipoNovoPadrao, setTipoNovoPadrao] = useState('entrada');
   const [itemEditando, setItemEditando] = useState(null);
+  const [grupoEditando, setGrupoEditando] = useState(null);
   const [itemPagando, setItemPagando] = useState(null);
   const [alvoExclusao, setAlvoExclusao] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -408,13 +428,11 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
   return (
     <div className="app-shell">
       <Sidebar
-        usuario={usuario}
         secaoAtiva={secaoAtiva}
         onTrocarSecao={setSecaoAtiva}
         novasDividas={novasDividasNaoVistas}
         recolhida={sidebarRecolhida}
         onAlternarRecolhida={alternarSidebar}
-        onSair={onSair}
       />
 
       <div className="main-area">
@@ -478,6 +496,22 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
                 </svg>
               )}
             </button>
+
+            <button
+              type="button"
+              className="btn-profile-chip"
+              onClick={() => setPerfilAberto(true)}
+              aria-label="Abrir menu do perfil"
+              title={usuario.nome}
+            >
+              <span className="profile-chip-name">{usuario.nome}</span>
+              <span
+                className="avatar-circle small"
+                style={{ backgroundColor: usuario.avatarCor || '#0052d4' }}
+              >
+                {obterIniciais(usuario.nome)}
+              </span>
+            </button>
           </div>
         </header>
 
@@ -485,7 +519,7 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
           {erro && <div className="alert-error">{erro}</div>}
 
           {/* Barra de período (exibida nas seções que filtram por mês/total) */}
-          {secaoAtiva !== 'metas' && secaoAtiva !== 'estatisticas' && (
+          {!['metas', 'estatisticas', 'minha_conta', 'ajuda'].includes(secaoAtiva) && (
             <section className="period-bar">
               <div className="period-segmented">
                 <button
@@ -685,6 +719,7 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
                 onAdicionar={() => abrirNovo('entrada')}
                 onAlternarStatus={alternarStatus}
                 onEditar={abrirEdicao}
+                onEditarGrupo={setGrupoEditando}
                 onExcluirUnico={pedirExclusaoUnico}
                 onExcluirGrupo={pedirExclusaoGrupo}
               />
@@ -800,6 +835,7 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
                 onAdicionar={() => abrirNovo('entrada')}
                 onAlternarStatus={alternarStatus}
                 onEditar={abrirEdicao}
+                onEditarGrupo={setGrupoEditando}
                 onExcluirUnico={pedirExclusaoUnico}
                 onExcluirGrupo={pedirExclusaoGrupo}
               />
@@ -927,6 +963,7 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
                 onAdicionar={() => abrirNovo('divida')}
                 onAlternarStatus={alternarStatus}
                 onEditar={abrirEdicao}
+                onEditarGrupo={setGrupoEditando}
                 onExcluirUnico={pedirExclusaoUnico}
                 onExcluirGrupo={pedirExclusaoGrupo}
               />
@@ -995,6 +1032,7 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
                 onAdicionar={() => abrirNovo('saida')}
                 onAlternarStatus={alternarStatus}
                 onEditar={abrirEdicao}
+                onEditarGrupo={setGrupoEditando}
                 onExcluirUnico={pedirExclusaoUnico}
                 onExcluirGrupo={pedirExclusaoGrupo}
               />
@@ -1022,8 +1060,41 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
               onAtualizar={() => carregarDados(mes)}
             />
           )}
+
+          {/* ==================== MINHA CONTA (PERFIL) ==================== */}
+          {secaoAtiva === 'minha_conta' && (
+            <MinhaContaView
+              usuario={usuario}
+              lancamentosTodos={lancamentosTodos}
+              contas={contas}
+              metas={metas}
+              despesasFixas={despesasFixas}
+              salarioConfig={salarioConfig}
+              onUsuarioAtualizado={onUsuarioAtualizado}
+              onVoltar={() => setSecaoAtiva('visao_geral')}
+            />
+          )}
+
+          {/* ==================== CENTRAL DE AJUDA ==================== */}
+          {secaoAtiva === 'ajuda' && (
+            <AjudaView onVoltar={() => setSecaoAtiva('visao_geral')} />
+          )}
         </main>
       </div>
+
+      {/* Gaveta lateral de Perfil */}
+      <PerfilDrawer
+        aberto={perfilAberto}
+        usuario={usuario}
+        qtdContas={contas.length}
+        qtdMetas={metas.length}
+        qtdLancamentos={lancamentosTodos.length}
+        secaoAtiva={secaoAtiva}
+        onFechar={() => setPerfilAberto(false)}
+        onAbrirMinhaConta={() => setSecaoAtiva('minha_conta')}
+        onAbrirAjuda={() => setSecaoAtiva('ajuda')}
+        onSair={onSair}
+      />
 
       {/* Modais globais */}
       <NovoLancamentoModal
@@ -1034,6 +1105,13 @@ export default function Dashboard({ usuario, onSair, tema, onAlternarTema }) {
         origensSugeridas={origensSugeridas}
         onFechar={fecharModal}
         onSalvo={handleSalvo}
+      />
+
+      <EditarGrupoModal
+        grupo={grupoEditando}
+        origensSugeridas={origensSugeridas}
+        onFechar={() => setGrupoEditando(null)}
+        onSalvo={() => carregarDados(mes)}
       />
 
       <ConfirmarPagamentoModal

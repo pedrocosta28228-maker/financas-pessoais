@@ -373,3 +373,16 @@ test('PostgreSQL adapter: traduzirPlaceholdersPg converte ? em $1, $2... ignoran
     "UPDATE lancamentos SET titulo = $1, observacao = 'Pago?' WHERE id = $2 AND usuario_id = $3"
   );
 });
+
+test('Perfil e troca de senha: exige senha atual correta e invalida a senha antiga após troca', () => {
+  const senhaAntiga = 'senhaInicial123';
+  const senhaNova = 'novaSenhaSegura456';
+
+  const hashOriginal = hashSenha(senhaAntiga);
+  assert.equal(verificarSenha('senhaErrada', hashOriginal), false);
+  assert.equal(verificarSenha(senhaAntiga, hashOriginal), true);
+
+  const hashAtualizado = hashSenha(senhaNova);
+  assert.equal(verificarSenha(senhaAntiga, hashAtualizado), false);
+  assert.equal(verificarSenha(senhaNova, hashAtualizado), true);
+});

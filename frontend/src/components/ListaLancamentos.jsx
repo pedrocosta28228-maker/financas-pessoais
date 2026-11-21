@@ -99,6 +99,7 @@ export default function ListaLancamentos({
   onAdicionar,
   onAlternarStatus,
   onEditar,
+  onEditarGrupo,
   onExcluirUnico,
   onExcluirGrupo,
 }) {
@@ -432,6 +433,17 @@ export default function ListaLancamentos({
                     >
                       {aberto ? 'Ocultar ▴' : 'Ver parcelas ▾'}
                     </button>
+
+                    {onEditarGrupo && (
+                      <button
+                        type="button"
+                        className="btn-small"
+                        onClick={() => onEditarGrupo(entrada)}
+                        title="Editar valor, data ou descrição de todas as parcelas"
+                      >
+                        Editar todas
+                      </button>
+                    )}
 
                     <button
                       type="button"

@@ -171,6 +171,7 @@ export async function initDb() {
         nome TEXT NOT NULL,
         email TEXT NOT NULL UNIQUE,
         senha_hash TEXT NOT NULL,
+        avatar_cor TEXT NOT NULL DEFAULT '#0052d4',
         criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -234,6 +235,8 @@ export async function initDb() {
         ativa INTEGER NOT NULL DEFAULT 1,
         criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS avatar_cor TEXT NOT NULL DEFAULT '#0052d4';
     `);
 
     console.log('Banco de dados PostgreSQL conectado e tabelas prontas!');
@@ -256,6 +259,7 @@ export async function initDb() {
       nome TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       senha_hash TEXT NOT NULL,
+      avatar_cor TEXT NOT NULL DEFAULT '#0052d4',
       criado_em TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -331,6 +335,11 @@ export async function initDb() {
   `);
 
   // Migrações seguras para bancos SQLite antigos sem perder nenhum dado
+  const colunasUsuarios = sqliteDb.prepare('PRAGMA table_info(usuarios)').all();
+  if (!colunasUsuarios.some((c) => c.name === 'avatar_cor')) {
+    sqliteDb.exec("ALTER TABLE usuarios ADD COLUMN avatar_cor TEXT NOT NULL DEFAULT '#0052d4';");
+  }
+
   const colunasContas = sqliteDb.prepare('PRAGMA table_info(contas)').all();
   if (!colunasContas.some((c) => c.name === 'rendimento')) {
     sqliteDb.exec("ALTER TABLE contas ADD COLUMN rendimento TEXT NOT NULL DEFAULT '';");

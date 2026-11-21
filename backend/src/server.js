@@ -116,10 +116,17 @@ app.post(
       senhaCriptografada
     );
 
+    const usuarioCriado = await db.get(
+      'SELECT id, nome, email, avatar_cor, criado_em FROM usuarios WHERE id = ?',
+      novoId
+    );
+
     const novoUsuario = {
-      id: novoId,
-      nome: nome.trim(),
-      email: emailLimpo,
+      id: usuarioCriado.id,
+      nome: usuarioCriado.nome,
+      email: usuarioCriado.email,
+      avatarCor: usuarioCriado.avatar_cor || '#0052d4',
+      criadoEm: usuarioCriado.criado_em || null,
     };
 
     const token = gerarToken(novoUsuario);
@@ -146,7 +153,7 @@ app.post(
     const emailLimpo = email.trim().toLowerCase();
 
     const usuarioDb = await db.get(
-      'SELECT id, nome, email, senha_hash FROM usuarios WHERE email = ?',
+      'SELECT id, nome, email, senha_hash, avatar_cor, criado_em FROM usuarios WHERE email = ?',
       emailLimpo
     );
 
@@ -158,6 +165,8 @@ app.post(
       id: usuarioDb.id,
       nome: usuarioDb.nome,
       email: usuarioDb.email,
+      avatarCor: usuarioDb.avatar_cor || '#0052d4',
+      criadoEm: usuarioDb.criado_em || null,
     };
 
     const token = gerarToken(usuario);
@@ -166,10 +175,113 @@ app.post(
   })
 );
 
-// 3. Consultar quem está logado (rota protegida pelo middleware "autenticar")
-app.get('/api/auth/me', autenticar, (req, res) => {
-  res.json({ usuario: req.usuario });
-});
+// 3. Consultar quem está logado (lê dados atualizados do banco)
+app.get(
+  '/api/auth/me',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const usuarioDb = await db.get(
+      'SELECT id, nome, email, avatar_cor, criado_em FROM usuarios WHERE id = ?',
+      req.usuario.id
+    );
+
+    if (!usuarioDb) {
+      return res.status(401).json({ erro: 'Sessão inválida. Faça login novamente.' });
+    }
+
+    return res.json({
+      usuario: {
+        id: usuarioDb.id,
+        nome: usuarioDb.nome,
+        email: usuarioDb.email,
+        avatarCor: usuarioDb.avatar_cor || '#0052d4',
+        criadoEm: usuarioDb.criado_em || null,
+      },
+    });
+  })
+);
+
+// 3b. Atualizar dados do perfil (nome e cor do avatar)
+app.put(
+  '/api/auth/perfil',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const nomeLimpo = (req.body.nome || '').trim();
+    const avatarCor = /^#[0-9a-fA-F]{6}$/.test(req.body.avatarCor || '')
+      ? req.body.avatarCor
+      : '#0052d4';
+
+    if (nomeLimpo.length < 2 || nomeLimpo.length > 80) {
+      return res
+        .status(400)
+        .json({ erro: 'Informe um nome com 2 a 80 caracteres.' });
+    }
+
+    await db.run(
+      'UPDATE usuarios SET nome = ?, avatar_cor = ? WHERE id = ?',
+      nomeLimpo,
+      avatarCor,
+      req.usuario.id
+    );
+
+    const usuarioDb = await db.get(
+      'SELECT id, nome, email, avatar_cor, criado_em FROM usuarios WHERE id = ?',
+      req.usuario.id
+    );
+
+    const usuario = {
+      id: usuarioDb.id,
+      nome: usuarioDb.nome,
+      email: usuarioDb.email,
+      avatarCor: usuarioDb.avatar_cor || '#0052d4',
+      criadoEm: usuarioDb.criado_em || null,
+    };
+
+    const token = gerarToken(usuario);
+
+    return res.json({ usuario, token });
+  })
+);
+
+// 3c. Alterar senha da conta (exige a senha atual para segurança)
+app.put(
+  '/api/auth/senha',
+  autenticar,
+  authRateLimiter,
+  asyncHandler(async (req, res) => {
+    const { senhaAtual, novaSenha } = req.body;
+
+    if (!senhaAtual || !novaSenha) {
+      return res
+        .status(400)
+        .json({ erro: 'Informe a senha atual e a nova senha.' });
+    }
+
+    if (typeof novaSenha !== 'string' || novaSenha.length < 6 || novaSenha.length > 128) {
+      return res
+        .status(400)
+        .json({ erro: 'A nova senha precisa ter entre 6 e 128 caracteres.' });
+    }
+
+    const usuarioDb = await db.get(
+      'SELECT id, senha_hash FROM usuarios WHERE id = ?',
+      req.usuario.id
+    );
+
+    if (!usuarioDb || !verificarSenha(senhaAtual, usuarioDb.senha_hash)) {
+      return res.status(401).json({ erro: 'A senha atual está incorreta.' });
+    }
+
+    const novoHash = hashSenha(novaSenha);
+    await db.run(
+      'UPDATE usuarios SET senha_hash = ? WHERE id = ?',
+      novoHash,
+      req.usuario.id
+    );
+
+    return res.json({ ok: true });
+  })
+);
 
 // ============================================================================
 // ROTAS DE FINANÇAS (Todas protegidas — só funcionam com Login!)
@@ -482,6 +594,85 @@ app.patch(
     const atualizado = await db.get(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`, id);
 
     return res.json({ lancamento: atualizado });
+  })
+);
+
+// 6b. Editar TODAS as parcelas de um grupo de dívida de uma vez (dentro de Transação SQL)
+app.put(
+  '/api/lancamentos/grupo/:grupoId',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const { grupoId } = req.params;
+    const {
+      titulo,
+      valorParcela,
+      dataPrimeiraParcela,
+      categoria,
+      origemDivida,
+      manterPagas,
+    } = req.body;
+
+    const valorNumero = Number(valorParcela);
+
+    if (!titulo?.trim()) {
+      return res.status(400).json({ erro: 'Informe uma descrição para a dívida.' });
+    }
+    if (!Number.isFinite(valorNumero) || valorNumero <= 0) {
+      return res.status(400).json({ erro: 'Informe um valor de parcela maior que zero.' });
+    }
+    if (!dataPrimeiraParcela || !/^\d{4}-\d{2}-\d{2}$/.test(dataPrimeiraParcela)) {
+      return res.status(400).json({ erro: 'Informe uma data válida para a 1ª parcela.' });
+    }
+
+    const parcelas = await db.all(
+      `
+        SELECT id, status, valor
+        FROM lancamentos
+        WHERE grupo_parcela = ? AND usuario_id = ?
+        ORDER BY data ASC, id ASC
+      `,
+      grupoId,
+      req.usuario.id
+    );
+
+    if (parcelas.length === 0) {
+      return res.status(404).json({ erro: 'Grupo de parcelas não encontrado.' });
+    }
+
+    const tituloBase = titulo.trim();
+    const categoriaFinal = categoria?.trim() || 'Parcelamento';
+    const origemFinal = origemDivida?.trim() || '';
+    const total = parcelas.length;
+    const preservarValorPagas = Boolean(manterPagas);
+
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < total; i++) {
+        const parcela = parcelas[i];
+        const tituloParcela = `${tituloBase} (${i + 1}/${total})`;
+        const novaData = somarMesesSeguro(dataPrimeiraParcela, i);
+        const novoValor =
+          preservarValorPagas && parcela.status === 'pago'
+            ? parcela.valor
+            : valorNumero;
+
+        await tx.run(
+          `
+            UPDATE lancamentos
+            SET titulo = ?, valor = ?, data = ?, categoria = ?, origem_divida = ?
+            WHERE id = ? AND usuario_id = ?
+          `,
+          tituloParcela,
+          novoValor,
+          novaData,
+          categoriaFinal,
+          origemFinal,
+          parcela.id,
+          req.usuario.id
+        );
+      }
+    });
+
+    return res.json({ ok: true, atualizadas: total });
   })
 );
 

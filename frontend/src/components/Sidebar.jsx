@@ -69,13 +69,11 @@ const ITENS_MENU = [
 ];
 
 export default function Sidebar({
-  usuario,
   secaoAtiva,
   onTrocarSecao,
   novasDividas,
   recolhida,
   onAlternarRecolhida,
-  onSair,
 }) {
   return (
     <aside className={recolhida ? 'sidebar collapsed' : 'sidebar'}>
@@ -85,7 +83,6 @@ export default function Sidebar({
             <div className="logo-badge small">R$</div>
             <div className="sidebar-brand-text">
               <h1>Minhas Finanças</h1>
-              <span className="greeting">Olá, {usuario.nome}</span>
             </div>
           </div>
         )}
@@ -136,25 +133,6 @@ export default function Sidebar({
           );
         })}
       </nav>
-
-      <div className="sidebar-footer">
-        <button
-          type="button"
-          className="btn-logout"
-          onClick={onSair}
-          title={recolhida ? 'Sair da conta' : undefined}
-        >
-          {recolhida ? (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-          ) : (
-            'Sair da conta'
-          )}
-        </button>
-      </div>
     </aside>
   );
 }

@@ -65,6 +65,7 @@ export default function App() {
   return (
     <Dashboard
       usuario={usuario}
+      onUsuarioAtualizado={setUsuario}
       onSair={handleSair}
       tema={tema}
       onAlternarTema={alternarTema}
