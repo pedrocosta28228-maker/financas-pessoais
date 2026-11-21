@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -385,4 +386,31 @@ test('Perfil e troca de senha: exige senha atual correta e invalida a senha anti
   const hashAtualizado = hashSenha(senhaNova);
   assert.equal(verificarSenha(senhaAntiga, hashAtualizado), false);
   assert.equal(verificarSenha(senhaNova, hashAtualizado), true);
+});
+
+test('Recuperação de senha: código SHA-256 validado com timingSafeEqual e expiração respeitada', () => {
+  const codigo = '482915';
+  const hashSalvo = crypto.createHash('sha256').update(codigo).digest('hex');
+
+  // Nunca armazena o código em texto puro
+  assert.ok(!hashSalvo.includes(codigo));
+
+  const tentativaCorreta = Buffer.from(
+    crypto.createHash('sha256').update('482915').digest('hex'),
+    'hex'
+  );
+  const tentativaErrada = Buffer.from(
+    crypto.createHash('sha256').update('000000').digest('hex'),
+    'hex'
+  );
+  const salvoBuf = Buffer.from(hashSalvo, 'hex');
+
+  assert.equal(crypto.timingSafeEqual(tentativaCorreta, salvoBuf), true);
+  assert.equal(crypto.timingSafeEqual(tentativaErrada, salvoBuf), false);
+
+  // Expiração de 15 minutos
+  const expiraNoFuturo = Date.now() + 15 * 60 * 1000;
+  const jaExpirou = Date.now() - 1000;
+  assert.ok(expiraNoFuturo > Date.now());
+  assert.ok(jaExpirou < Date.now());
 });

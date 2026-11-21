@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { api, obterToken, removerToken } from './api.js';
+import LandingPage from './components/LandingPage.jsx';
 import Login from './components/Login.jsx';
 import Dashboard from './components/Dashboard.jsx';
 
 /**
  * Componente raiz da aplicação.
- * Decide se mostra a tela de Login ou o Painel Financeiro.
+ * - Usuário logado: vai direto para o Dashboard.
+ * - Visitante sem login: vê a Landing Page e escolhe Entrar ou Criar conta.
  */
 export default function App() {
   const [usuario, setUsuario] = useState(null);
   const [verificandoSessao, setVerificandoSessao] = useState(true);
+  const [telaPublica, setTelaPublica] = useState('landing'); // 'landing' | 'login' | 'cadastro'
   const [tema, setTema] = useState(() => {
     const salvo = localStorage.getItem('financeiro_tema');
     return salvo === 'dark' ? 'dark' : 'light';
@@ -48,6 +51,7 @@ export default function App() {
   function handleSair() {
     removerToken();
     setUsuario(null);
+    setTelaPublica('landing');
   }
 
   if (verificandoSessao) {
@@ -59,7 +63,26 @@ export default function App() {
   }
 
   if (!usuario) {
-    return <Login onAutenticado={setUsuario} />;
+    if (telaPublica === 'landing') {
+      return (
+        <LandingPage
+          tema={tema}
+          onAlternarTema={alternarTema}
+          onAbrirLogin={() => setTelaPublica('login')}
+          onAbrirCadastro={() => setTelaPublica('cadastro')}
+        />
+      );
+    }
+
+    return (
+      <Login
+        modoInicial={telaPublica}
+        onAutenticado={setUsuario}
+        onVoltar={() => setTelaPublica('landing')}
+        tema={tema}
+        onAlternarTema={alternarTema}
+      />
+    );
   }
 
   return (

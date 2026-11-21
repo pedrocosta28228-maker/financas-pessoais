@@ -236,6 +236,15 @@ export async function initDb() {
         criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS reset_senhas (
+        id SERIAL PRIMARY KEY,
+        usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+        codigo_hash TEXT NOT NULL,
+        expira_em BIGINT NOT NULL,
+        usado INTEGER NOT NULL DEFAULT 0,
+        criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
       ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS avatar_cor TEXT NOT NULL DEFAULT '#0052d4';
     `);
 
@@ -331,6 +340,16 @@ export async function initDb() {
       criado_em TEXT DEFAULT (datetime('now', 'localtime')),
       FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
       FOREIGN KEY (conta_id) REFERENCES contas(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reset_senhas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario_id INTEGER NOT NULL,
+      codigo_hash TEXT NOT NULL,
+      expira_em INTEGER NOT NULL,
+      usado INTEGER NOT NULL DEFAULT 0,
+      criado_em TEXT DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
     );
   `);
 

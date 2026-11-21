@@ -78,6 +78,18 @@ export const api = {
       body: JSON.stringify({ senhaAtual, novaSenha }),
     }),
 
+  solicitarRecuperacaoSenha: (email) =>
+    requisicao('/auth/esqueci-senha', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  redefinirSenha: (email, codigo, novaSenha) =>
+    requisicao('/auth/redefinir-senha', {
+      method: 'POST',
+      body: JSON.stringify({ email, codigo, novaSenha }),
+    }),
+
   listarLancamentos: (mes) =>
     requisicao(mes ? `/lancamentos?mes=${encodeURIComponent(mes)}` : '/lancamentos'),
 

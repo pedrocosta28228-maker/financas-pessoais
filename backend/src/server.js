@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, initDb, dbType } from './db.js';
 import { hashSenha, verificarSenha, gerarToken, autenticar } from './auth.js';
+import { enviarCodigoRecuperacao, emailConfigurado } from './email.js';
 import {
   helmetMiddleware,
   criarOpcoesCors,
@@ -280,6 +281,143 @@ app.put(
     );
 
     return res.json({ ok: true });
+  })
+);
+
+function hashCodigoReset(codigo) {
+  return crypto.createHash('sha256').update(String(codigo)).digest('hex');
+}
+
+// 3d. Solicitar código de 6 dígitos para recuperar senha ("Esqueci minha senha")
+app.post(
+  '/api/auth/esqueci-senha',
+  authRateLimiter,
+  asyncHandler(async (req, res) => {
+    const emailLimpo = (req.body.email || '').trim().toLowerCase();
+
+    if (!validarEmail(emailLimpo)) {
+      return res.status(400).json({ erro: 'Informe um endereço de e-mail válido.' });
+    }
+
+    if (IS_PROD && !emailConfigurado()) {
+      return res.status(503).json({
+        erro: 'Recuperação por e-mail ainda não configurada no servidor. Configure BREVO_API_KEY e EMAIL_REMETENTE no Render.',
+      });
+    }
+
+    const mensagemPadrao =
+      'Se este e-mail estiver cadastrado, enviamos um código de 6 dígitos (válido por 15 minutos).';
+
+    const usuarioDb = await db.get(
+      'SELECT id, nome, email FROM usuarios WHERE email = ?',
+      emailLimpo
+    );
+
+    // Resposta idêntica mesmo quando o e-mail não existe (evita enumeração de contas)
+    if (!usuarioDb) {
+      return res.json({ ok: true, mensagem: mensagemPadrao });
+    }
+
+    const codigo = String(crypto.randomInt(100000, 1000000));
+    const codigoHash = hashCodigoReset(codigo);
+    const expiraEm = Date.now() + 15 * 60 * 1000;
+
+    await db.transaction(async (tx) => {
+      await tx.run('DELETE FROM reset_senhas WHERE usuario_id = ?', usuarioDb.id);
+      await tx.insert(
+        'INSERT INTO reset_senhas (usuario_id, codigo_hash, expira_em, usado) VALUES (?, ?, ?, 0)',
+        usuarioDb.id,
+        codigoHash,
+        expiraEm
+      );
+    });
+
+    const envio = await enviarCodigoRecuperacao({
+      para: usuarioDb.email,
+      nome: usuarioDb.nome,
+      codigo,
+    });
+
+    return res.json({
+      ok: true,
+      mensagem: mensagemPadrao,
+      // Apenas em desenvolvimento local (sem servidor de e-mail) facilita testar o fluxo
+      ...(envio.modo === 'dev' && !IS_PROD ? { codigoDev: codigo } : {}),
+    });
+  })
+);
+
+// 3e. Confirmar código de 6 dígitos e gravar a nova senha
+app.post(
+  '/api/auth/redefinir-senha',
+  authRateLimiter,
+  asyncHandler(async (req, res) => {
+    const emailLimpo = (req.body.email || '').trim().toLowerCase();
+    const codigoLimpo = String(req.body.codigo || '').replace(/\D/g, '');
+    const { novaSenha } = req.body;
+
+    if (!validarEmail(emailLimpo)) {
+      return res.status(400).json({ erro: 'Informe um e-mail válido.' });
+    }
+    if (!/^\d{6}$/.test(codigoLimpo)) {
+      return res.status(400).json({ erro: 'Informe o código de 6 dígitos recebido no e-mail.' });
+    }
+    if (typeof novaSenha !== 'string' || novaSenha.length < 6 || novaSenha.length > 128) {
+      return res
+        .status(400)
+        .json({ erro: 'A nova senha precisa ter entre 6 e 128 caracteres.' });
+    }
+
+    const usuarioDb = await db.get(
+      'SELECT id FROM usuarios WHERE email = ?',
+      emailLimpo
+    );
+
+    if (!usuarioDb) {
+      return res.status(400).json({ erro: 'Código inválido ou expirado.' });
+    }
+
+    const registroReset = await db.get(
+      `
+        SELECT id, codigo_hash, expira_em
+        FROM reset_senhas
+        WHERE usuario_id = ? AND usado = 0
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      usuarioDb.id
+    );
+
+    if (!registroReset || Number(registroReset.expira_em) < Date.now()) {
+      return res
+        .status(400)
+        .json({ erro: 'Código inválido ou expirado. Solicite um novo código.' });
+    }
+
+    const tentativaBuf = Buffer.from(hashCodigoReset(codigoLimpo), 'hex');
+    const originalBuf = Buffer.from(registroReset.codigo_hash, 'hex');
+
+    if (
+      tentativaBuf.length !== originalBuf.length ||
+      !crypto.timingSafeEqual(tentativaBuf, originalBuf)
+    ) {
+      return res
+        .status(400)
+        .json({ erro: 'Código inválido ou expirado. Verifique os 6 dígitos.' });
+    }
+
+    const novoHash = hashSenha(novaSenha);
+
+    await db.transaction(async (tx) => {
+      await tx.run(
+        'UPDATE usuarios SET senha_hash = ? WHERE id = ?',
+        novoHash,
+        usuarioDb.id
+      );
+      await tx.run('DELETE FROM reset_senhas WHERE usuario_id = ?', usuarioDb.id);
+    });
+
+    return res.json({ ok: true, mensagem: 'Senha redefinida com sucesso! Faça login.' });
   })
 );
 
