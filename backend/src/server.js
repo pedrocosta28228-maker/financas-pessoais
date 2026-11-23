@@ -7,7 +7,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, initDb, dbType } from './db.js';
 import { hashSenha, verificarSenha, gerarToken, autenticar } from './auth.js';
-import { enviarCodigoRecuperacao, emailConfigurado } from './email.js';
+import {
+  enviarCodigoRecuperacao,
+  enviarLembreteVencimento,
+  enviarResumoMensal,
+  emailConfigurado,
+} from './email.js';
+import {
+  obterDataBrasilia,
+  obterConfigNotificacaoUsuario,
+  calcularProximoDisparoResumo,
+  coletarContasDoDia,
+  coletarResumoDoMes,
+  executarRotinaNotificacoes,
+} from './notificacoes.js';
 import {
   helmetMiddleware,
   criarOpcoesCors,
@@ -1744,6 +1757,315 @@ app.delete(
     }
 
     return res.json({ ok: true });
+  })
+);
+
+// ============================================================================
+// ROTAS DE NOTIFICAÇÕES POR E-MAIL (Preferências, Teste e Disparo Diário Cron)
+// ============================================================================
+
+function obterAppUrlPublica() {
+  return (process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || '').trim();
+}
+
+function compararSegredoSeguro(recebido, esperado) {
+  if (!recebido || !esperado) return false;
+  const h1 = crypto.createHash('sha256').update(String(recebido)).digest();
+  const h2 = crypto.createHash('sha256').update(String(esperado)).digest();
+  return crypto.timingSafeEqual(h1, h2);
+}
+
+// 28. Buscar preferências de notificação por e-mail + próxima data do resumo mensal
+app.get(
+  '/api/notificacoes/config',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const config = await obterConfigNotificacaoUsuario(db, req.usuario.id);
+    const salario = await db.get(
+      'SELECT dia_pagamento FROM salario_fixo WHERE usuario_id = ?',
+      req.usuario.id
+    );
+    const hoje = obterDataBrasilia();
+    const diaPagamento = salario ? Number(salario.dia_pagamento) : null;
+
+    const proximoResumo = calcularProximoDisparoResumo({
+      hojeIso: hoje.dataIso,
+      diaPagamento,
+      diasAntes: config.diasAntesSalario,
+    });
+
+    const ultimosEnvios = await db.all(
+      `
+        SELECT tipo, chave_referencia, enviado_em
+        FROM notificacoes_enviadas
+        WHERE usuario_id = ?
+        ORDER BY id DESC
+        LIMIT 5
+      `,
+      req.usuario.id
+    );
+
+    return res.json({
+      config,
+      emailConfigurado: emailConfigurado(),
+      diaSalario: diaPagamento,
+      proximoResumo,
+      ultimosEnvios,
+    });
+  })
+);
+
+// 29. Salvar preferências de notificação por e-mail
+app.put(
+  '/api/notificacoes/config',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const ativo = req.body.ativo ? 1 : 0;
+    const lembreteDia = req.body.lembreteDia ? 1 : 0;
+    const lembreteVespera = req.body.lembreteVespera ? 1 : 0;
+    const resumoMensal = req.body.resumoMensal ? 1 : 0;
+    const diasAntesNum = Number(req.body.diasAntesSalario ?? 1);
+
+    if (!Number.isInteger(diasAntesNum) || diasAntesNum < 0 || diasAntesNum > 5) {
+      return res
+        .status(400)
+        .json({ erro: 'A antecedência do resumo mensal deve ficar entre 0 e 5 dias.' });
+    }
+
+    await db.run(
+      `
+        INSERT INTO notificacoes_config (
+          usuario_id, ativo, lembrete_dia, lembrete_vespera, resumo_mensal, dias_antes_salario, atualizado_em
+        )
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(usuario_id) DO UPDATE SET
+          ativo = excluded.ativo,
+          lembrete_dia = excluded.lembrete_dia,
+          lembrete_vespera = excluded.lembrete_vespera,
+          resumo_mensal = excluded.resumo_mensal,
+          dias_antes_salario = excluded.dias_antes_salario,
+          atualizado_em = CURRENT_TIMESTAMP
+      `,
+      req.usuario.id,
+      ativo,
+      lembreteDia,
+      lembreteVespera,
+      resumoMensal,
+      diasAntesNum
+    );
+
+    const config = await obterConfigNotificacaoUsuario(db, req.usuario.id);
+    const salario = await db.get(
+      'SELECT dia_pagamento FROM salario_fixo WHERE usuario_id = ?',
+      req.usuario.id
+    );
+    const hoje = obterDataBrasilia();
+    const diaPagamento = salario ? Number(salario.dia_pagamento) : null;
+    const proximoResumo = calcularProximoDisparoResumo({
+      hojeIso: hoje.dataIso,
+      diaPagamento,
+      diasAntes: config.diasAntesSalario,
+    });
+
+    return res.json({ config, proximoResumo });
+  })
+);
+
+// 30. Enviar e-mail de teste na hora para o próprio usuário logado
+app.post(
+  '/api/notificacoes/testar',
+  autenticar,
+  authRateLimiter,
+  asyncHandler(async (req, res) => {
+    const tipo = req.body?.tipo === 'vencimento' ? 'vencimento' : 'resumo';
+    const usuarioDb = await db.get(
+      'SELECT id, nome, email FROM usuarios WHERE id = ?',
+      req.usuario.id
+    );
+
+    if (!usuarioDb) {
+      return res.status(404).json({ erro: 'Usuário não encontrado.' });
+    }
+
+    const hoje = obterDataBrasilia();
+    const appUrl = obterAppUrlPublica();
+
+    if (tipo === 'vencimento') {
+      let dataAlvo = hoje.dataIso;
+      let { itens, total } = await coletarContasDoDia(db, usuarioDb.id, dataAlvo);
+      let usandoExemplo = false;
+
+      // Se não houver nada vencendo exatamente hoje, busca a próxima conta pendente do usuário
+      if (itens.length === 0) {
+        const proxima = await db.get(
+          `
+            SELECT data FROM lancamentos
+            WHERE usuario_id = ?
+              AND status = 'pendente'
+              AND tipo IN ('divida', 'saida')
+              AND data >= ?
+            ORDER BY data ASC
+            LIMIT 1
+          `,
+          usuarioDb.id,
+          hoje.dataIso
+        );
+
+        if (proxima?.data) {
+          dataAlvo = proxima.data;
+          ({ itens, total } = await coletarContasDoDia(db, usuarioDb.id, dataAlvo));
+        }
+      }
+
+      if (itens.length === 0) {
+        usandoExemplo = true;
+        itens = [
+          {
+            titulo: 'Parcela exemplo (cartão)',
+            valor: 250,
+            data: hoje.dataIso,
+            categoria: 'Cartão de crédito',
+            origem: 'Cartão exemplo',
+            fonte: 'divida',
+          },
+        ];
+        total = 250;
+      }
+
+      try {
+        const envio = await enviarLembreteVencimento({
+          para: usuarioDb.email,
+          nome: usuarioDb.nome,
+          dataIso: dataAlvo,
+          ehAmanha: false,
+          itens,
+          total,
+          appUrl,
+          ehTeste: true,
+        });
+
+        const avisoExemplo = usandoExemplo
+          ? ' (usamos um exemplo porque você não tem contas pendentes futuras cadastradas)'
+          : '';
+
+        return res.json({
+          ok: true,
+          modo: envio.modo,
+          mensagem:
+            envio.modo === 'dev'
+              ? `Modo local (sem Brevo): preview do lembrete exibido no terminal do servidor${avisoExemplo}.`
+              : `Lembrete de teste enviado para ${usuarioDb.email}${avisoExemplo}! Confira sua caixa de entrada.`,
+        });
+      } catch (err) {
+        console.error('Erro ao enviar lembrete de teste:', err);
+        return res.status(503).json({
+          erro: 'O envio de e-mail ainda não está configurado no servidor (Brevo). Configure BREVO_API_KEY e EMAIL_REMETENTE no Render.',
+        });
+      }
+    }
+
+    // Teste de resumo mensal
+    let resumo = await coletarResumoDoMes(db, usuarioDb.id, hoje.mesRef);
+    let usandoExemplo = false;
+
+    if (resumo.itens.length === 0) {
+      usandoExemplo = true;
+      resumo = {
+        ...resumo,
+        itens: [
+          {
+            titulo: 'Conta de exemplo 1',
+            valor: 320,
+            data: `${hoje.mesRef}-10`,
+            categoria: 'Cartão de crédito',
+            origem: 'Cartão exemplo',
+            fonte: 'divida',
+          },
+          {
+            titulo: 'Internet (exemplo)',
+            valor: 110,
+            data: `${hoje.mesRef}-15`,
+            categoria: 'Moradia',
+            origem: '',
+            fonte: 'despesa_fixa',
+          },
+        ],
+        totalMes: 430,
+      };
+    }
+
+    try {
+      const envio = await enviarResumoMensal({
+        para: usuarioDb.email,
+        nome: usuarioDb.nome,
+        nomeMes: resumo.nomeMes,
+        diaSalario: resumo.diaSalario,
+        salarioValor: resumo.salarioValor,
+        itens: resumo.itens,
+        totalMes: resumo.totalMes,
+        appUrl,
+        ehTeste: true,
+      });
+
+      const avisoExemplo = usandoExemplo
+        ? ' (usamos dados de exemplo porque este mês não tem contas pendentes)'
+        : '';
+
+      return res.json({
+        ok: true,
+        modo: envio.modo,
+        mensagem:
+          envio.modo === 'dev'
+            ? `Modo local (sem Brevo): preview do resumo mensal exibido no terminal do servidor${avisoExemplo}.`
+            : `Resumo mensal de teste enviado para ${usuarioDb.email}${avisoExemplo}! Confira sua caixa de entrada.`,
+      });
+    } catch (err) {
+      console.error('Erro ao enviar resumo de teste:', err);
+      return res.status(503).json({
+        erro: 'O envio de e-mail ainda não está configurado no servidor (Brevo). Configure BREVO_API_KEY e EMAIL_REMETENTE no Render.',
+      });
+    }
+  })
+);
+
+// 31. Rota protegida de Cron diário (acionada às 08h BRT pelo GitHub Actions)
+let rotinaNotificacoesEmAndamento = false;
+
+app.post(
+  '/api/cron/notificacoes',
+  authRateLimiter,
+  asyncHandler(async (req, res) => {
+    const segredoEsperado = (process.env.CRON_SECRET || '').trim();
+    if (segredoEsperado.length < 16) {
+      return res.status(503).json({
+        erro: 'Rotina automática não configurada (defina CRON_SECRET com pelo menos 16 caracteres).',
+      });
+    }
+
+    const headerAuth = String(req.headers.authorization || '');
+    const bearerToken = headerAuth.startsWith('Bearer ') ? headerAuth.slice(7).trim() : '';
+    const segredoRecebido = String(req.headers['x-cron-secret'] || bearerToken || '').trim();
+
+    if (!compararSegredoSeguro(segredoRecebido, segredoEsperado)) {
+      return res.status(401).json({ erro: 'Chave de agendamento inválida.' });
+    }
+
+    if (rotinaNotificacoesEmAndamento) {
+      return res.status(409).json({
+        erro: 'A rotina de notificações já está em execução. Aguarde concluir.',
+      });
+    }
+
+    rotinaNotificacoesEmAndamento = true;
+    try {
+      const resumoExecucao = await executarRotinaNotificacoes({
+        db,
+        appUrl: obterAppUrlPublica(),
+      });
+      return res.json({ ok: true, ...resumoExecucao });
+    } finally {
+      rotinaNotificacoesEmAndamento = false;
+    }
   })
 );
 

@@ -14,3 +14,9 @@ services:
         generateValue: true
       - key: DATABASE_URL
         sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_REMETENTE
+        sync: false
+      - key: CRON_SECRET
+        sync: false

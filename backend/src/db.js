@@ -245,7 +245,28 @@ export async function initDb() {
         criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS notificacoes_config (
+        usuario_id INTEGER PRIMARY KEY REFERENCES usuarios(id) ON DELETE CASCADE,
+        ativo INTEGER NOT NULL DEFAULT 1,
+        lembrete_dia INTEGER NOT NULL DEFAULT 1,
+        lembrete_vespera INTEGER NOT NULL DEFAULT 0,
+        resumo_mensal INTEGER NOT NULL DEFAULT 1,
+        dias_antes_salario INTEGER NOT NULL DEFAULT 1 CHECK (dias_antes_salario BETWEEN 0 AND 5),
+        atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS notificacoes_enviadas (
+        id SERIAL PRIMARY KEY,
+        usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+        tipo TEXT NOT NULL,
+        chave_referencia TEXT NOT NULL,
+        enviado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (usuario_id, tipo, chave_referencia)
+      );
+
       ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS avatar_cor TEXT NOT NULL DEFAULT '#0052d4';
+      CREATE INDEX IF NOT EXISTS idx_lancamentos_usuario_status_data
+        ON lancamentos (usuario_id, status, data);
     `);
 
     console.log('Banco de dados PostgreSQL conectado e tabelas prontas!');
@@ -351,6 +372,30 @@ export async function initDb() {
       criado_em TEXT DEFAULT (datetime('now', 'localtime')),
       FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS notificacoes_config (
+      usuario_id INTEGER PRIMARY KEY,
+      ativo INTEGER NOT NULL DEFAULT 1,
+      lembrete_dia INTEGER NOT NULL DEFAULT 1,
+      lembrete_vespera INTEGER NOT NULL DEFAULT 0,
+      resumo_mensal INTEGER NOT NULL DEFAULT 1,
+      dias_antes_salario INTEGER NOT NULL DEFAULT 1 CHECK (dias_antes_salario BETWEEN 0 AND 5),
+      atualizado_em TEXT DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS notificacoes_enviadas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario_id INTEGER NOT NULL,
+      tipo TEXT NOT NULL,
+      chave_referencia TEXT NOT NULL,
+      enviado_em TEXT DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+      UNIQUE (usuario_id, tipo, chave_referencia)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lancamentos_usuario_status_data
+      ON lancamentos (usuario_id, status, data);
   `);
 
   // Migrações seguras para bancos SQLite antigos sem perder nenhum dado

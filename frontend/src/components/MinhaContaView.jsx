@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, salvarToken } from '../api.js';
 import { obterIniciais } from './PerfilDrawer.jsx';
 
@@ -69,7 +69,80 @@ export default function MinhaContaView({
   const [erroSenha, setErroSenha] = useState('');
   const [sucessoSenha, setSucessoSenha] = useState('');
 
+  // Preferências de notificações por e-mail
+  const [notifCarregando, setNotifCarregando] = useState(true);
+  const [notifConfig, setNotifConfig] = useState({
+    ativo: true,
+    lembreteDia: true,
+    lembreteVespera: false,
+    resumoMensal: true,
+    diasAntesSalario: 1,
+  });
+  const [emailServidorOk, setEmailServidorOk] = useState(true);
+  const [diaSalarioNotif, setDiaSalarioNotif] = useState(
+    salarioConfig?.dia_pagamento || null
+  );
+  const [proximoResumo, setProximoResumo] = useState(null);
+  const [salvandoNotif, setSalvandoNotif] = useState(false);
+  const [testandoTipo, setTestandoTipo] = useState('');
+  const [erroNotif, setErroNotif] = useState('');
+  const [sucessoNotif, setSucessoNotif] = useState('');
+
   const dataCadastro = formatarDataCadastro(usuario.criadoEm);
+
+  useEffect(() => {
+    let ativo = true;
+    api
+      .obterNotificacoesConfig()
+      .then((resp) => {
+        if (!ativo) return;
+        if (resp?.config) setNotifConfig(resp.config);
+        setEmailServidorOk(Boolean(resp?.emailConfigurado));
+        setDiaSalarioNotif(resp?.diaSalario ?? salarioConfig?.dia_pagamento ?? null);
+        setProximoResumo(resp?.proximoResumo || null);
+      })
+      .catch(() => {
+        // Mantém padrões caso a busca inicial falhe
+      })
+      .finally(() => {
+        if (ativo) setNotifCarregando(false);
+      });
+
+    return () => {
+      ativo = false;
+    };
+  }, [salarioConfig?.dia_pagamento]);
+
+  async function handleSalvarNotificacoes(e) {
+    e.preventDefault();
+    setErroNotif('');
+    setSucessoNotif('');
+    setSalvandoNotif(true);
+    try {
+      const resp = await api.salvarNotificacoesConfig(notifConfig);
+      if (resp?.config) setNotifConfig(resp.config);
+      setProximoResumo(resp?.proximoResumo || null);
+      setSucessoNotif('Preferências de lembretes salvas!');
+    } catch (err) {
+      setErroNotif(err.message);
+    } finally {
+      setSalvandoNotif(false);
+    }
+  }
+
+  async function handleTestarEmail(tipo) {
+    setErroNotif('');
+    setSucessoNotif('');
+    setTestandoTipo(tipo);
+    try {
+      const resp = await api.testarNotificacaoEmail(tipo);
+      setSucessoNotif(resp.mensagem || 'E-mail de teste disparado!');
+    } catch (err) {
+      setErroNotif(err.message);
+    } finally {
+      setTestandoTipo('');
+    }
+  }
 
   async function handleSalvarPerfil(e) {
     e.preventDefault();
@@ -309,7 +382,181 @@ export default function MinhaContaView({
         </section>
       </div>
 
-      {/* Card 3: Exportação e Backup */}
+      {/* Card 3: Lembretes e Resumo por E-mail */}
+      <section className="panel notif-panel">
+        <div className="notif-header">
+          <div>
+            <div className="notif-title-row">
+              <h2>Lembretes por e-mail</h2>
+              <span
+                className={
+                  notifConfig.ativo ? 'notif-status-pill ativo' : 'notif-status-pill pausado'
+                }
+              >
+                {notifConfig.ativo ? 'Ativos' : 'Pausados'}
+              </span>
+            </div>
+            <p className="chart-subtitle">
+              Enviados para <strong>{usuario.email}</strong> às 08h (horário de Brasília).
+            </p>
+          </div>
+
+          <label className="notif-master-toggle">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={notifConfig.ativo}
+              disabled={notifCarregando}
+              onChange={(e) =>
+                setNotifConfig((prev) => ({ ...prev, ativo: e.target.checked }))
+              }
+            />
+            <span className="notif-switch-track" aria-hidden="true" />
+            <span className="notif-master-label">
+              {notifConfig.ativo ? 'Ligado' : 'Desligado'}
+            </span>
+          </label>
+        </div>
+
+        <form onSubmit={handleSalvarNotificacoes} className="notif-form">
+          <div className={notifConfig.ativo ? 'notif-options' : 'notif-options disabled'}>
+            <label className="notif-option-row">
+              <div className="notif-option-text">
+                <strong>Aviso no dia do vencimento (08h)</strong>
+                <span>
+                  Envia a lista de dívidas e despesas fixas que vencem hoje, com valor e para quem pagar.
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                role="switch"
+                className="notif-checkbox-switch"
+                disabled={!notifConfig.ativo || notifCarregando}
+                checked={notifConfig.lembreteDia}
+                onChange={(e) =>
+                  setNotifConfig((prev) => ({ ...prev, lembreteDia: e.target.checked }))
+                }
+              />
+            </label>
+
+            <label className="notif-option-row">
+              <div className="notif-option-text">
+                <strong>Aviso antecipado na véspera (1 dia antes)</strong>
+                <span>
+                  Receba um lembrete um dia antes do vencimento para já deixar o valor separado.
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                role="switch"
+                className="notif-checkbox-switch"
+                disabled={!notifConfig.ativo || notifCarregando}
+                checked={notifConfig.lembreteVespera}
+                onChange={(e) =>
+                  setNotifConfig((prev) => ({ ...prev, lembreteVespera: e.target.checked }))
+                }
+              />
+            </label>
+
+            <div className="notif-option-row column">
+              <label className="notif-option-row-inner">
+                <div className="notif-option-text">
+                  <strong>Resumo mensal das contas previstas</strong>
+                  <span>
+                    {diaSalarioNotif
+                      ? `Lista todas as contas do mês perto do dia do seu salário (dia ${diaSalarioNotif}).`
+                      : 'Sem salário fixo cadastrado — enviamos todo dia 1 do mês com todas as contas previstas.'}
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="notif-checkbox-switch"
+                  disabled={!notifConfig.ativo || notifCarregando}
+                  checked={notifConfig.resumoMensal}
+                  onChange={(e) =>
+                    setNotifConfig((prev) => ({ ...prev, resumoMensal: e.target.checked }))
+                  }
+                />
+              </label>
+
+              {notifConfig.ativo && notifConfig.resumoMensal && (
+                <div className="notif-subconfig">
+                  {diaSalarioNotif ? (
+                    <label className="notif-inline-select">
+                      <span>Quando enviar:</span>
+                      <select
+                        value={notifConfig.diasAntesSalario}
+                        onChange={(e) =>
+                          setNotifConfig((prev) => ({
+                            ...prev,
+                            diasAntesSalario: Number(e.target.value),
+                          }))
+                        }
+                      >
+                        <option value={0}>No dia do salário (dia {diaSalarioNotif})</option>
+                        <option value={1}>1 dia antes do salário</option>
+                        <option value={2}>2 dias antes do salário</option>
+                        <option value={3}>3 dias antes do salário</option>
+                        <option value={5}>5 dias antes do salário</option>
+                      </select>
+                    </label>
+                  ) : null}
+
+                  {proximoResumo?.dataDisparoIso && (
+                    <span className="notif-next-pill">
+                      Próximo resumo: {formatarDataCadastro(proximoResumo.dataDisparoIso)} (
+                      {proximoResumo.nomeMes})
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {!emailServidorOk && (
+            <div className="notif-hint-box">
+              O servidor ainda não está com a chave da <strong>Brevo</strong> ativa. No modo local,
+              os testes aparecem no terminal do servidor; no site online, basta configurar{' '}
+              <code>BREVO_API_KEY</code> e <code>EMAIL_REMETENTE</code> no Render.
+            </div>
+          )}
+
+          {erroNotif && <div className="alert-error">{erroNotif}</div>}
+          {sucessoNotif && <div className="alert-success">{sucessoNotif}</div>}
+
+          <div className="notif-actions">
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={salvandoNotif || notifCarregando}
+            >
+              {salvandoNotif ? 'Salvando...' : 'Salvar preferências'}
+            </button>
+
+            <div className="notif-test-buttons">
+              <button
+                type="button"
+                className="btn-outline"
+                disabled={Boolean(testandoTipo)}
+                onClick={() => handleTestarEmail('vencimento')}
+              >
+                {testandoTipo === 'vencimento' ? 'Enviando...' : 'Testar aviso do dia'}
+              </button>
+              <button
+                type="button"
+                className="btn-outline"
+                disabled={Boolean(testandoTipo)}
+                onClick={() => handleTestarEmail('resumo')}
+              >
+                {testandoTipo === 'resumo' ? 'Enviando...' : 'Testar resumo do mês'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      {/* Card 4: Exportação e Backup */}
       <section className="panel backup-panel">
         <div className="backup-info">
           <h2>Seus dados e backup</h2>

@@ -214,4 +214,18 @@ export const api = {
     requisicao(`/despesas-fixas/${id}`, {
       method: 'DELETE',
     }),
+
+  obterNotificacoesConfig: () => requisicao('/notificacoes/config'),
+
+  salvarNotificacoesConfig: (dados) =>
+    requisicao('/notificacoes/config', {
+      method: 'PUT',
+      body: JSON.stringify(dados),
+    }),
+
+  testarNotificacaoEmail: (tipo) =>
+    requisicao('/notificacoes/testar', {
+      method: 'POST',
+      body: JSON.stringify({ tipo }),
+    }),
 };
