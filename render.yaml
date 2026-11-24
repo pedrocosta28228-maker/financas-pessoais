@@ -20,3 +20,7 @@ services:
         sync: false
       - key: CRON_SECRET
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash

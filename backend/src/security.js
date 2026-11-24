@@ -138,3 +138,17 @@ export const apiRateLimiter = rateLimit({
     erro: 'Muitas requisições em pouco tempo. Aguarde um instante e tente novamente.',
   },
 });
+
+/**
+ * Rate Limit dedicado para o Agente de IA:
+ * protege a cota gratuita da API do Gemini contra rajadas de mensagens (30 a cada 15 min por IP).
+ */
+export const agenteRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    erro: 'Muitas mensagens para o assistente em pouco tempo. Aguarde alguns minutos e tente novamente.',
+  },
+});

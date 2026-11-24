@@ -264,9 +264,34 @@ export async function initDb() {
         UNIQUE (usuario_id, tipo, chave_referencia)
       );
 
+      CREATE TABLE IF NOT EXISTS agente_mensagens (
+        id SERIAL PRIMARY KEY,
+        usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+        papel TEXT NOT NULL CHECK (papel IN ('usuario', 'assistente')),
+        conteudo TEXT NOT NULL,
+        criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS agente_acoes_pendentes (
+        id SERIAL PRIMARY KEY,
+        usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+        mensagem_id INTEGER DEFAULT NULL REFERENCES agente_mensagens(id) ON DELETE SET NULL,
+        tipo_acao TEXT NOT NULL CHECK (tipo_acao IN ('criar_lancamento', 'marcar_pago', 'criar_meta', 'criar_despesa_fixa')),
+        resumo TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'confirmada', 'cancelada')),
+        resultado_json TEXT DEFAULT NULL,
+        criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        resolvido_em TIMESTAMP DEFAULT NULL
+      );
+
       ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS avatar_cor TEXT NOT NULL DEFAULT '#0052d4';
       CREATE INDEX IF NOT EXISTS idx_lancamentos_usuario_status_data
         ON lancamentos (usuario_id, status, data);
+      CREATE INDEX IF NOT EXISTS idx_agente_mensagens_usuario
+        ON agente_mensagens (usuario_id, id);
+      CREATE INDEX IF NOT EXISTS idx_agente_acoes_mensagem
+        ON agente_acoes_pendentes (mensagem_id);
     `);
 
     console.log('Banco de dados PostgreSQL conectado e tabelas prontas!');
@@ -394,8 +419,36 @@ export async function initDb() {
       UNIQUE (usuario_id, tipo, chave_referencia)
     );
 
+    CREATE TABLE IF NOT EXISTS agente_mensagens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario_id INTEGER NOT NULL,
+      papel TEXT NOT NULL CHECK (papel IN ('usuario', 'assistente')),
+      conteudo TEXT NOT NULL,
+      criado_em TEXT DEFAULT (datetime('now', 'localtime')),
+      FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS agente_acoes_pendentes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario_id INTEGER NOT NULL,
+      mensagem_id INTEGER DEFAULT NULL,
+      tipo_acao TEXT NOT NULL CHECK (tipo_acao IN ('criar_lancamento', 'marcar_pago', 'criar_meta', 'criar_despesa_fixa')),
+      resumo TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'confirmada', 'cancelada')),
+      resultado_json TEXT DEFAULT NULL,
+      criado_em TEXT DEFAULT (datetime('now', 'localtime')),
+      resolvido_em TEXT DEFAULT NULL,
+      FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+      FOREIGN KEY (mensagem_id) REFERENCES agente_mensagens(id) ON DELETE SET NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_lancamentos_usuario_status_data
       ON lancamentos (usuario_id, status, data);
+    CREATE INDEX IF NOT EXISTS idx_agente_mensagens_usuario
+      ON agente_mensagens (usuario_id, id);
+    CREATE INDEX IF NOT EXISTS idx_agente_acoes_mensagem
+      ON agente_acoes_pendentes (mensagem_id);
   `);
 
   // Migrações seguras para bancos SQLite antigos sem perder nenhum dado

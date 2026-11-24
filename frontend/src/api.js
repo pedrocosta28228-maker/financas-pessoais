@@ -228,4 +228,29 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ tipo }),
     }),
+
+  agenteStatus: () => requisicao('/agente/status'),
+
+  agenteHistorico: () => requisicao('/agente/historico'),
+
+  agenteEnviarMensagem: (mensagem) =>
+    requisicao('/agente/mensagem', {
+      method: 'POST',
+      body: JSON.stringify({ mensagem }),
+    }),
+
+  agenteConfirmarAcao: (id) =>
+    requisicao(`/agente/acoes/${id}/confirmar`, {
+      method: 'POST',
+    }),
+
+  agenteCancelarAcao: (id) =>
+    requisicao(`/agente/acoes/${id}/cancelar`, {
+      method: 'POST',
+    }),
+
+  agenteLimparHistorico: () =>
+    requisicao('/agente/historico', {
+      method: 'DELETE',
+    }),
 };

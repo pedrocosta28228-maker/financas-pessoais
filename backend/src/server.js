@@ -26,8 +26,19 @@ import {
   criarOpcoesCors,
   authRateLimiter,
   apiRateLimiter,
+  agenteRateLimiter,
   validarEmail,
 } from './security.js';
+import {
+  obterStatusAgente,
+  carregarHistoricoAgente,
+  limparHistoricoAgente,
+  processarMensagemAgente,
+} from './agente.js';
+import {
+  confirmarAcaoPendente,
+  cancelarAcaoPendente,
+} from './agente-tools.js';
 
 /**
  * Envolve rotas async no Express 4 para que qualquer erro rejeitado
@@ -2066,6 +2077,107 @@ app.post(
     } finally {
       rotinaNotificacoesEmAndamento = false;
     }
+  })
+);
+
+// ============================================================================
+// ROTAS DO AGENTE DE IA FINANCEIRO (Google Gemini + Confirmação em 1 clique)
+// ============================================================================
+
+app.get(
+  '/api/agente/status',
+  autenticar,
+  asyncHandler(async (_req, res) => {
+    return res.json(obterStatusAgente());
+  })
+);
+
+app.get(
+  '/api/agente/historico',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const mensagens = await carregarHistoricoAgente(req.usuario.id, { db, limite: 50 });
+    return res.json({ mensagens });
+  })
+);
+
+app.post(
+  '/api/agente/mensagem',
+  autenticar,
+  agenteRateLimiter,
+  asyncHandler(async (req, res) => {
+    const mensagem = typeof req.body?.mensagem === 'string' ? req.body.mensagem.trim() : '';
+    if (!mensagem) {
+      return res.status(400).json({ erro: 'Digite uma mensagem para o assistente.' });
+    }
+    if (mensagem.length > 1500) {
+      return res.status(400).json({ erro: 'A mensagem pode ter no máximo 1500 caracteres.' });
+    }
+
+    try {
+      const resultado = await processarMensagemAgente({
+        usuarioId: req.usuario.id,
+        mensagem,
+        db,
+      });
+      return res.json(resultado);
+    } catch (err) {
+      if (err?.status && err.status >= 400 && err.status < 600) {
+        return res.status(err.status).json({ erro: err.message });
+      }
+      throw err;
+    }
+  })
+);
+
+app.post(
+  '/api/agente/acoes/:id/confirmar',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ erro: 'ID de ação inválido.' });
+    }
+
+    try {
+      const { acao, resultado } = await confirmarAcaoPendente(id, req.usuario.id, { db });
+      return res.json({ ok: true, acao, resultado });
+    } catch (err) {
+      if (err?.status && err.status >= 400 && err.status < 600) {
+        return res.status(err.status).json({ erro: err.message });
+      }
+      throw err;
+    }
+  })
+);
+
+app.post(
+  '/api/agente/acoes/:id/cancelar',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ erro: 'ID de ação inválido.' });
+    }
+
+    try {
+      const { acao } = await cancelarAcaoPendente(id, req.usuario.id, { db });
+      return res.json({ ok: true, acao });
+    } catch (err) {
+      if (err?.status && err.status >= 400 && err.status < 600) {
+        return res.status(err.status).json({ erro: err.message });
+      }
+      throw err;
+    }
+  })
+);
+
+app.delete(
+  '/api/agente/historico',
+  autenticar,
+  asyncHandler(async (req, res) => {
+    const resultado = await limparHistoricoAgente(req.usuario.id, { db });
+    return res.json(resultado);
   })
 );
 
