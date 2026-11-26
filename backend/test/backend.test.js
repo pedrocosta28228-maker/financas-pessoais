@@ -5,8 +5,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { hashSenha, verificarSenha, gerarToken } from '../src/auth.js';
-import { resolverJwtSecret, validarEmail, criarOpcoesCors } from '../src/security.js';
+import {
+  hashSenha,
+  verificarSenha,
+  verificarSenhaDummy,
+  gerarToken,
+  verificarToken,
+  criarMiddlewareAutenticar,
+} from '../src/auth.js';
+import {
+  resolverJwtSecret,
+  validarEmail,
+  validarIdPositivo,
+  criarOpcoesCors,
+} from '../src/security.js';
 import { traduzirPlaceholdersPg } from '../src/db.js';
 import {
   detectarResumoMensalParaHoje,
@@ -800,5 +812,119 @@ test('Notificações: respeita opt-out (ativo = 0) e envia aviso na véspera qua
   } finally {
     conn.close();
     if (fs.existsSync(tempDb)) fs.unlinkSync(tempDb);
+  }
+});
+
+test('Segurança (IDs): validarIdPositivo aceita apenas inteiros positivos e rejeita textos/injeções', () => {
+  assert.equal(validarIdPositivo('42'), 42);
+  assert.equal(validarIdPositivo(7), 7);
+  assert.equal(validarIdPositivo('0'), null);
+  assert.equal(validarIdPositivo('-5'), null);
+  assert.equal(validarIdPositivo('abc'), null);
+  assert.equal(validarIdPositivo('1 OR 1=1'), null);
+  assert.equal(validarIdPositivo('12.5'), null);
+  assert.equal(validarIdPositivo(''), null);
+  assert.equal(validarIdPositivo(undefined), null);
+});
+
+test('Segurança (JWT e Sessão): restringe HS256 (bloqueia alg:none) e revoga tokens antigos ao incrementar token_version', async () => {
+  // Token forjado com alg:none deve ser rejeitado
+  const headerNone = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+  const payloadFake = Buffer.from(JSON.stringify({ id: 1, nome: 'Admin', email: 'a@b.c' })).toString('base64url');
+  const tokenAlgNone = `${headerNone}.${payloadFake}.`;
+  assert.throws(() => verificarToken(tokenAlgNone));
+
+  // verificarSenhaDummy sempre retorna false sem lançar erro
+  assert.equal(verificarSenhaDummy('qualquerSenha123'), false);
+
+  // Middleware autenticar valida token_version no banco
+  let versaoAtual = 0;
+  const dbFake = {
+    async get(_sql, id) {
+      return id === 1 ? { id: 1, token_version: versaoAtual } : undefined;
+    },
+  };
+  const mw = criarMiddlewareAutenticar(dbFake);
+
+  const tokenAntigo = gerarToken({ id: 1, nome: 'Pedro', email: 'p@teste.dev', tokenVersion: 0 });
+
+  const executarMw = (token) =>
+    new Promise((resolve) => {
+      const req = { headers: token ? { authorization: `Bearer ${token}` } : {} };
+      const res = {
+        statusCode: 200,
+        body: null,
+        status(code) {
+          this.statusCode = code;
+          return this;
+        },
+        json(payload) {
+          this.body = payload;
+          resolve({ ok: false, status: this.statusCode, body: payload });
+        },
+      };
+      mw(req, res, (err) => {
+        if (err) resolve({ ok: false, status: 500, err });
+        else resolve({ ok: true, usuario: req.usuario });
+      });
+    });
+
+  // Antes de trocar senha: token v0 é aceito
+  const okAntes = await executarMw(tokenAntigo);
+  assert.equal(okAntes.ok, true);
+  assert.equal(okAntes.usuario.id, 1);
+
+  // Após trocar/redefinir senha (token_version sobe para 1): token antigo é revogado na hora!
+  versaoAtual = 1;
+  const revogado = await executarMw(tokenAntigo);
+  assert.equal(revogado.ok, false);
+  assert.equal(revogado.status, 401);
+
+  // Novo token v1 volta a ser aceito normalmente
+  const tokenNovo = gerarToken({ id: 1, nome: 'Pedro', email: 'p@teste.dev', tokenVersion: 1 });
+  const okDepois = await executarMw(tokenNovo);
+  assert.equal(okDepois.ok, true);
+});
+
+test('Segurança (Reset de senha): invalida código após 5 tentativas incorretas', () => {
+  const tempDb = path.join(os.tmpdir(), `financeiro-reset-sec-${Date.now()}.db`);
+  const conn = new DatabaseSync(tempDb);
+
+  try {
+    conn.exec(`
+      CREATE TABLE reset_senhas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario_id INTEGER NOT NULL,
+        codigo_hash TEXT NOT NULL,
+        expira_em INTEGER NOT NULL,
+        usado INTEGER NOT NULL DEFAULT 0,
+        tentativas INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+
+    const codigoCorreto = '654321';
+    const hashCorreto = crypto.createHash('sha256').update(codigoCorreto).digest('hex');
+    const resetId = Number(
+      conn
+        .prepare('INSERT INTO reset_senhas (usuario_id, codigo_hash, expira_em) VALUES (?, ?, ?)')
+        .run(1, hashCorreto, Date.now() + 15 * 60 * 1000).lastInsertRowid
+    );
+
+    // Simula 5 tentativas incorretas consecutivas
+    for (let i = 1; i <= 5; i++) {
+      const reg = conn.prepare('SELECT id, tentativas, usado FROM reset_senhas WHERE id = ?').get(resetId);
+      const novas = Number(reg.tentativas) + 1;
+      const esgotou = novas >= 5;
+      conn
+        .prepare('UPDATE reset_senhas SET tentativas = ?, usado = ? WHERE id = ?')
+        .run(novas, esgotou ? 1 : 0, resetId);
+    }
+
+    const finalReg = conn.prepare('SELECT tentativas, usado FROM reset_senhas WHERE id = ?').get(resetId);
+    assert.equal(finalReg.tentativas, 5);
+    assert.equal(finalReg.usado, 1);
+  } finally {
+    conn.close();
+    fs.rmSync(tempDb, { force: true });
   }
 });

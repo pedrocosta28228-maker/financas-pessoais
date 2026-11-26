@@ -173,7 +173,10 @@ export default function MinhaContaView({
 
     setSalvandoSenha(true);
     try {
-      await api.alterarSenha(senhaAtual, novaSenha);
+      const resp = await api.alterarSenha(senhaAtual, novaSenha);
+      if (resp?.token) {
+        salvarToken(resp.token);
+      }
       setSenhaAtual('');
       setNovaSenha('');
       setConfirmarSenha('');

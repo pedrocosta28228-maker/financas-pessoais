@@ -1,5 +1,5 @@
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const SEGREDOS_FRACOS = new Set([
   'segredo-local-desenvolvimento',
@@ -40,6 +40,18 @@ export function validarEmail(email) {
   const limpo = email.trim().toLowerCase();
   if (limpo.length < 5 || limpo.length > 120) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(limpo);
+}
+
+/**
+ * Valida IDs numéricos positivos recebidos em parâmetros de URL (:id).
+ * Evita erros 500 de cast no PostgreSQL e bloqueia entradas malformadas com 400.
+ */
+export function validarIdPositivo(valor) {
+  if (valor === undefined || valor === null || valor === '') return null;
+  const texto = String(valor).trim();
+  if (!/^\d+$/.test(texto)) return null;
+  const id = Number(texto);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 /**
@@ -141,13 +153,18 @@ export const apiRateLimiter = rateLimit({
 
 /**
  * Rate Limit dedicado para o Agente de IA:
- * protege a cota gratuita da API do Gemini contra rajadas de mensagens (30 a cada 15 min por IP).
+ * protege a cota gratuita da API do Gemini por usuário autenticado (ou IP como fallback),
+ * limitando a 30 mensagens a cada 15 minutos.
  */
 export const agenteRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
+  keyGenerator: (req) => {
+    if (req.usuario?.id) return `agente:u:${req.usuario.id}`;
+    return `agente:ip:${ipKeyGenerator(req.ip || '127.0.0.1')}`;
+  },
   message: {
     erro: 'Muitas mensagens para o assistente em pouco tempo. Aguarde alguns minutos e tente novamente.',
   },

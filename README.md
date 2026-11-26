@@ -48,7 +48,7 @@ financeiro/
    npm --prefix backend install
    npm --prefix frontend install
    ```
-3. Rode os testes automatizados (30 testes):
+3. Rode os testes automatizados (36 testes):
    ```bash
    npm test
    ```
@@ -73,10 +73,10 @@ financeiro/
 - [x] Menu de Perfil em gaveta lateral (*Minha conta* com avatar, troca de senha, preferências de lembretes, exportação `CSV`/`JSON` e *Central de Ajuda*)
 - [x] Lembretes automáticos por e-mail (vencimento às 08h + resumo mensal perto do salário) com **Brevo + GitHub Actions** e anti-duplicidade
 - [x] Assistente Financeiro com IA (**Google Gemini** + *function calling*) integrado ao dashboard, com histórico persistido e confirmação em 1 clique
-- [x] Blindagem de produção (`helmet`, `express-rate-limit`, CORS restrito, Fail-Fast em `JWT_SECRET`, `timingSafeEqual` em segredos e escape XSS em e-mails)
+- [x] Blindagem de produção (`helmet`, `express-rate-limit` por IP e usuário, CORS restrito, Fail-Fast em `JWT_SECRET`, `HS256` explícito, revogação de sessão via `token_version`, limite de 5 tentativas no reset de senha, validação estrita de `:id`, `sourcemap: false`, defesa anti-prompt-injection e escape XSS em e-mails)
 - [x] Adapter de banco duplo: **SQLite local** e **PostgreSQL na nuvem (Neon.tech)** via `DATABASE_URL`
 - [x] Deploy online gratuito no **Render.com** (`render.yaml`) + suporte a **PWA**
-- [x] Testes automatizados do backend com `node --test` (30/30 passando)
+- [x] Testes automatizados do backend com `node --test` (36/36 passando)
 
 ## Próximos Passos (Futuro — v3)
 - [ ] **Evolução do Assistente de IA:** janela centralizada, formatação rica (Markdown) nas respostas e entrada por voz (microfone)

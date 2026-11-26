@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, initDb, dbType } from './db.js';
-import { hashSenha, verificarSenha, gerarToken, autenticar } from './auth.js';
+import { hashSenha, verificarSenha, verificarSenhaDummy, gerarToken, autenticar } from './auth.js';
 import {
   enviarCodigoRecuperacao,
   enviarLembreteVencimento,
@@ -28,6 +28,7 @@ import {
   apiRateLimiter,
   agenteRateLimiter,
   validarEmail,
+  validarIdPositivo,
 } from './security.js';
 import {
   obterStatusAgente,
@@ -85,9 +86,9 @@ app.use(cors(criarOpcoesCors()));
 app.use(express.json({ limit: '100kb' }));
 app.use('/api', apiRateLimiter);
 
-// Rota simples para testar se o servidor está no ar
+// Rota simples para testar se o servidor está no ar (sem expor detalhes internos de banco/stack)
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, mensagem: 'API Financeiro rodando!', banco: dbType });
+  res.json({ ok: true, mensagem: 'API Financeiro rodando!' });
 });
 
 // ============================================================================
@@ -142,7 +143,7 @@ app.post(
     );
 
     const usuarioCriado = await db.get(
-      'SELECT id, nome, email, avatar_cor, criado_em FROM usuarios WHERE id = ?',
+      'SELECT id, nome, email, avatar_cor, token_version, criado_em FROM usuarios WHERE id = ?',
       novoId
     );
 
@@ -154,7 +155,10 @@ app.post(
       criadoEm: usuarioCriado.criado_em || null,
     };
 
-    const token = gerarToken(novoUsuario);
+    const token = gerarToken({
+      ...novoUsuario,
+      tokenVersion: Number(usuarioCriado.token_version ?? 0),
+    });
 
     return res.status(201).json({ usuario: novoUsuario, token });
   })
@@ -178,11 +182,16 @@ app.post(
     const emailLimpo = email.trim().toLowerCase();
 
     const usuarioDb = await db.get(
-      'SELECT id, nome, email, senha_hash, avatar_cor, criado_em FROM usuarios WHERE email = ?',
+      'SELECT id, nome, email, senha_hash, avatar_cor, token_version, criado_em FROM usuarios WHERE email = ?',
       emailLimpo
     );
 
-    if (!usuarioDb || !verificarSenha(senha, usuarioDb.senha_hash)) {
+    if (!usuarioDb) {
+      verificarSenhaDummy(senha);
+      return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
+    }
+
+    if (!verificarSenha(senha, usuarioDb.senha_hash)) {
       return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
     }
 
@@ -194,7 +203,10 @@ app.post(
       criadoEm: usuarioDb.criado_em || null,
     };
 
-    const token = gerarToken(usuario);
+    const token = gerarToken({
+      ...usuario,
+      tokenVersion: Number(usuarioDb.token_version ?? 0),
+    });
 
     return res.json({ usuario, token });
   })
@@ -250,7 +262,7 @@ app.put(
     );
 
     const usuarioDb = await db.get(
-      'SELECT id, nome, email, avatar_cor, criado_em FROM usuarios WHERE id = ?',
+      'SELECT id, nome, email, avatar_cor, token_version, criado_em FROM usuarios WHERE id = ?',
       req.usuario.id
     );
 
@@ -262,13 +274,16 @@ app.put(
       criadoEm: usuarioDb.criado_em || null,
     };
 
-    const token = gerarToken(usuario);
+    const token = gerarToken({
+      ...usuario,
+      tokenVersion: Number(usuarioDb.token_version ?? 0),
+    });
 
     return res.json({ usuario, token });
   })
 );
 
-// 3c. Alterar senha da conta (exige a senha atual para segurança)
+// 3c. Alterar senha da conta (exige a senha atual e revoga sessões antigas via token_version)
 app.put(
   '/api/auth/senha',
   autenticar,
@@ -289,7 +304,7 @@ app.put(
     }
 
     const usuarioDb = await db.get(
-      'SELECT id, senha_hash FROM usuarios WHERE id = ?',
+      'SELECT id, nome, email, senha_hash, token_version FROM usuarios WHERE id = ?',
       req.usuario.id
     );
 
@@ -298,13 +313,22 @@ app.put(
     }
 
     const novoHash = hashSenha(novaSenha);
+    const novaVersao = Number(usuarioDb.token_version ?? 0) + 1;
     await db.run(
-      'UPDATE usuarios SET senha_hash = ? WHERE id = ?',
+      'UPDATE usuarios SET senha_hash = ?, token_version = ? WHERE id = ?',
       novoHash,
+      novaVersao,
       req.usuario.id
     );
 
-    return res.json({ ok: true });
+    const novoToken = gerarToken({
+      id: usuarioDb.id,
+      nome: usuarioDb.nome,
+      email: usuarioDb.email,
+      tokenVersion: novaVersao,
+    });
+
+    return res.json({ ok: true, token: novoToken });
   })
 );
 
@@ -371,7 +395,9 @@ app.post(
   })
 );
 
-// 3e. Confirmar código de 6 dígitos e gravar a nova senha
+const MAX_TENTATIVAS_RESET = 5;
+
+// 3e. Confirmar código de 6 dígitos e gravar a nova senha (invalida após 5 erros e revoga sessões antigas)
 app.post(
   '/api/auth/redefinir-senha',
   authRateLimiter,
@@ -403,7 +429,7 @@ app.post(
 
     const registroReset = await db.get(
       `
-        SELECT id, codigo_hash, expira_em
+        SELECT id, codigo_hash, expira_em, tentativas
         FROM reset_senhas
         WHERE usuario_id = ? AND usado = 0
         ORDER BY id DESC
@@ -412,7 +438,11 @@ app.post(
       usuarioDb.id
     );
 
-    if (!registroReset || Number(registroReset.expira_em) < Date.now()) {
+    if (
+      !registroReset ||
+      Number(registroReset.expira_em) < Date.now() ||
+      Number(registroReset.tentativas || 0) >= MAX_TENTATIVAS_RESET
+    ) {
       return res
         .status(400)
         .json({ erro: 'Código inválido ou expirado. Solicite um novo código.' });
@@ -425,16 +455,26 @@ app.post(
       tentativaBuf.length !== originalBuf.length ||
       !crypto.timingSafeEqual(tentativaBuf, originalBuf)
     ) {
-      return res
-        .status(400)
-        .json({ erro: 'Código inválido ou expirado. Verifique os 6 dígitos.' });
+      const novasTentativas = Number(registroReset.tentativas || 0) + 1;
+      const esgotou = novasTentativas >= MAX_TENTATIVAS_RESET;
+      await db.run(
+        'UPDATE reset_senhas SET tentativas = ?, usado = ? WHERE id = ?',
+        novasTentativas,
+        esgotou ? 1 : 0,
+        registroReset.id
+      );
+      return res.status(400).json({
+        erro: esgotou
+          ? 'Muitas tentativas incorretas. Este código foi invalidado — solicite um novo código.'
+          : 'Código inválido ou expirado. Verifique os 6 dígitos.',
+      });
     }
 
     const novoHash = hashSenha(novaSenha);
 
     await db.transaction(async (tx) => {
       await tx.run(
-        'UPDATE usuarios SET senha_hash = ? WHERE id = ?',
+        'UPDATE usuarios SET senha_hash = ?, token_version = token_version + 1 WHERE id = ?',
         novoHash,
         usuarioDb.id
       );
@@ -688,7 +728,10 @@ app.patch(
   '/api/lancamentos/:id/status',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de lançamento inválido.' });
+    }
     const { status, descontarSaldo, valor, contaId } = req.body;
 
     if (!['pago', 'pendente'].includes(status)) {
@@ -753,7 +796,11 @@ app.patch(
       return res.status(404).json({ erro: 'Lançamento não encontrado.' });
     }
 
-    const atualizado = await db.get(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`, id);
+    const atualizado = await db.get(
+      `${SELECT_LANCAMENTO_BASE} WHERE l.id = ? AND l.usuario_id = ?`,
+      id,
+      req.usuario.id
+    );
 
     return res.json({ lancamento: atualizado });
   })
@@ -843,7 +890,10 @@ app.put(
   '/api/lancamentos/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de lançamento inválido.' });
+    }
     const {
       titulo,
       valor,
@@ -911,7 +961,11 @@ app.put(
       return res.status(404).json({ erro: 'Lançamento não encontrado.' });
     }
 
-    const atualizado = await db.get(`${SELECT_LANCAMENTO_BASE} WHERE l.id = ?`, id);
+    const atualizado = await db.get(
+      `${SELECT_LANCAMENTO_BASE} WHERE l.id = ? AND l.usuario_id = ?`,
+      id,
+      req.usuario.id
+    );
 
     return res.json({ lancamento: atualizado });
   })
@@ -943,7 +997,10 @@ app.delete(
   '/api/lancamentos/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de lançamento inválido.' });
+    }
 
     const resultado = await db.run(
       'DELETE FROM lancamentos WHERE id = ? AND usuario_id = ?',
@@ -1053,7 +1110,10 @@ app.put(
   '/api/contas/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de carteira inválido.' });
+    }
     const { nome, etiqueta, rendimento, cor } = req.body;
 
     if (!nome?.trim()) {
@@ -1079,8 +1139,9 @@ app.put(
     }
 
     const atualizada = await db.get(
-      'SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ?',
-      id
+      'SELECT id, nome, etiqueta, rendimento, cor, saldo_ajuste FROM contas WHERE id = ? AND usuario_id = ?',
+      id,
+      req.usuario.id
     );
 
     return res.json({ conta: atualizada });
@@ -1143,7 +1204,10 @@ app.delete(
   '/api/contas/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de carteira inválido.' });
+    }
 
     const conta = await db.get(
       'SELECT id, saldo_ajuste FROM contas WHERE id = ? AND usuario_id = ?',
@@ -1473,7 +1537,10 @@ app.put(
   '/api/metas/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de meta inválido.' });
+    }
     const { titulo, valorAlvo, valorAtual, prazo, cor, contaId, observacao } = req.body;
 
     const alvoNum = Number(valorAlvo);
@@ -1526,7 +1593,11 @@ app.put(
       return res.status(404).json({ erro: 'Meta não encontrada.' });
     }
 
-    const atualizada = await db.get(`${SELECT_META_BASE} WHERE m.id = ?`, id);
+    const atualizada = await db.get(
+      `${SELECT_META_BASE} WHERE m.id = ? AND m.usuario_id = ?`,
+      id,
+      req.usuario.id
+    );
     return res.json({ meta: atualizada });
   })
 );
@@ -1536,7 +1607,10 @@ app.patch(
   '/api/metas/:id/aportar',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de meta inválido.' });
+    }
     const valor = Number(req.body.valor);
     const operacao = req.body.operacao === 'retirar' ? 'retirar' : 'aportar';
 
@@ -1574,7 +1648,11 @@ app.patch(
       req.usuario.id
     );
 
-    const atualizada = await db.get(`${SELECT_META_BASE} WHERE m.id = ?`, id);
+    const atualizada = await db.get(
+      `${SELECT_META_BASE} WHERE m.id = ? AND m.usuario_id = ?`,
+      id,
+      req.usuario.id
+    );
     return res.json({ meta: atualizada });
   })
 );
@@ -1584,7 +1662,10 @@ app.delete(
   '/api/metas/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de meta inválido.' });
+    }
 
     const resultado = await db.run(
       'DELETE FROM metas WHERE id = ? AND usuario_id = ?',
@@ -1681,7 +1762,10 @@ app.put(
   '/api/despesas-fixas/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de despesa fixa inválido.' });
+    }
     const { titulo, valor, diaVencimento, categoria, contaId, ativa } = req.body;
 
     const valorNum = Number(valor);
@@ -1721,7 +1805,11 @@ app.put(
       return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
     }
 
-    const atualizada = await db.get(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`, id);
+    const atualizada = await db.get(
+      `${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ? AND d.usuario_id = ?`,
+      id,
+      req.usuario.id
+    );
     return res.json({ despesa: atualizada });
   })
 );
@@ -1731,7 +1819,10 @@ app.patch(
   '/api/despesas-fixas/:id/ativa',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de despesa fixa inválido.' });
+    }
     const ativaFinal = req.body.ativa ? 1 : 0;
 
     const resultado = await db.run(
@@ -1745,7 +1836,11 @@ app.patch(
       return res.status(404).json({ erro: 'Despesa fixa não encontrada.' });
     }
 
-    const atualizada = await db.get(`${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ?`, id);
+    const atualizada = await db.get(
+      `${SELECT_DESPESA_FIXA_BASE} WHERE d.id = ? AND d.usuario_id = ?`,
+      id,
+      req.usuario.id
+    );
     return res.json({ despesa: atualizada });
   })
 );
@@ -1755,7 +1850,10 @@ app.delete(
   '/api/despesas-fixas/:id',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
+      return res.status(400).json({ erro: 'ID de despesa fixa inválido.' });
+    }
 
     const resultado = await db.run(
       'DELETE FROM despesas_fixas WHERE id = ? AND usuario_id = ?',
@@ -2134,8 +2232,8 @@ app.post(
   '/api/agente/acoes/:id/confirmar',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
       return res.status(400).json({ erro: 'ID de ação inválido.' });
     }
 
@@ -2155,8 +2253,8 @@ app.post(
   '/api/agente/acoes/:id/cancelar',
   autenticar,
   asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
+    const id = validarIdPositivo(req.params.id);
+    if (!id) {
       return res.status(400).json({ erro: 'ID de ação inválido.' });
     }
 

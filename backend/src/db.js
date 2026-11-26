@@ -172,6 +172,7 @@ export async function initDb() {
         email TEXT NOT NULL UNIQUE,
         senha_hash TEXT NOT NULL,
         avatar_cor TEXT NOT NULL DEFAULT '#0052d4',
+        token_version INTEGER NOT NULL DEFAULT 0,
         criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -242,6 +243,7 @@ export async function initDb() {
         codigo_hash TEXT NOT NULL,
         expira_em BIGINT NOT NULL,
         usado INTEGER NOT NULL DEFAULT 0,
+        tentativas INTEGER NOT NULL DEFAULT 0,
         criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -286,6 +288,8 @@ export async function initDb() {
       );
 
       ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS avatar_cor TEXT NOT NULL DEFAULT '#0052d4';
+      ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE reset_senhas ADD COLUMN IF NOT EXISTS tentativas INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS idx_lancamentos_usuario_status_data
         ON lancamentos (usuario_id, status, data);
       CREATE INDEX IF NOT EXISTS idx_agente_mensagens_usuario
@@ -315,6 +319,7 @@ export async function initDb() {
       email TEXT NOT NULL UNIQUE,
       senha_hash TEXT NOT NULL,
       avatar_cor TEXT NOT NULL DEFAULT '#0052d4',
+      token_version INTEGER NOT NULL DEFAULT 0,
       criado_em TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -394,6 +399,7 @@ export async function initDb() {
       codigo_hash TEXT NOT NULL,
       expira_em INTEGER NOT NULL,
       usado INTEGER NOT NULL DEFAULT 0,
+      tentativas INTEGER NOT NULL DEFAULT 0,
       criado_em TEXT DEFAULT (datetime('now', 'localtime')),
       FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
     );
@@ -455,6 +461,14 @@ export async function initDb() {
   const colunasUsuarios = sqliteDb.prepare('PRAGMA table_info(usuarios)').all();
   if (!colunasUsuarios.some((c) => c.name === 'avatar_cor')) {
     sqliteDb.exec("ALTER TABLE usuarios ADD COLUMN avatar_cor TEXT NOT NULL DEFAULT '#0052d4';");
+  }
+  if (!colunasUsuarios.some((c) => c.name === 'token_version')) {
+    sqliteDb.exec('ALTER TABLE usuarios ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;');
+  }
+
+  const colunasReset = sqliteDb.prepare('PRAGMA table_info(reset_senhas)').all();
+  if (!colunasReset.some((c) => c.name === 'tentativas')) {
+    sqliteDb.exec('ALTER TABLE reset_senhas ADD COLUMN tentativas INTEGER NOT NULL DEFAULT 0;');
   }
 
   const colunasContas = sqliteDb.prepare('PRAGMA table_info(contas)').all();

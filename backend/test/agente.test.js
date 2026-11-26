@@ -899,3 +899,130 @@ test('revisão #5: listar_lancamentos filtra busca no SQL antes do LIMIT mesmo c
     ctx.fechar();
   }
 });
+
+test('segurança IA: rejeita título gigante, valor sub-centavo e valor acima do teto máximo', async () => {
+  const ctx = criarDbTeste();
+  try {
+    const u1 = await ctx.db.insert(
+      'INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)',
+      'Pedro',
+      'pedro@secia1.dev',
+      'hash'
+    );
+
+    await assert.rejects(
+      () =>
+        criarPropostaAcao(
+          'propor_criar_lancamento',
+          { titulo: 'A'.repeat(121), valor: 50, tipo: 'saida' },
+          u1,
+          { db: ctx.db, hojeIso: '2026-11-26' }
+        ),
+      (err) => err.status === 400
+    );
+
+    await assert.rejects(
+      () =>
+        criarPropostaAcao(
+          'propor_criar_lancamento',
+          { titulo: 'Centavo zero', valor: 0.001, tipo: 'saida' },
+          u1,
+          { db: ctx.db, hojeIso: '2026-11-26' }
+        ),
+      (err) => err.status === 400
+    );
+
+    await assert.rejects(
+      () =>
+        criarPropostaAcao(
+          'propor_criar_lancamento',
+          { titulo: 'Absurdo', valor: 999_999_999_999, tipo: 'saida' },
+          u1,
+          { db: ctx.db, hojeIso: '2026-11-26' }
+        ),
+      (err) => err.status === 400
+    );
+  } finally {
+    ctx.fechar();
+  }
+});
+
+test('segurança IA: proposta pendente com mais de 24h expira (410), vira cancelada e não grava no banco', async () => {
+  const ctx = criarDbTeste();
+  try {
+    const u1 = await ctx.db.insert(
+      'INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)',
+      'Pedro',
+      'pedro@secia2.dev',
+      'hash'
+    );
+
+    const { acao } = await criarPropostaAcao(
+      'propor_criar_lancamento',
+      { titulo: 'Café antigo', valor: 15, tipo: 'saida', data: '2026-11-24' },
+      u1,
+      { db: ctx.db, hojeIso: '2026-11-24' }
+    );
+
+    // Simula confirmação 25 horas depois da criação
+    const agoraFuturo = Date.now() + 25 * 60 * 60 * 1000;
+    await assert.rejects(
+      () => confirmarAcaoPendente(acao.id, u1, { db: ctx.db, agoraMs: agoraFuturo }),
+      (err) => err.status === 410
+    );
+
+    const acaoDb = await ctx.db.get('SELECT status FROM agente_acoes_pendentes WHERE id = ?', acao.id);
+    assert.equal(acaoDb.status, 'cancelada');
+
+    const lancs = await ctx.db.all('SELECT id FROM lancamentos WHERE usuario_id = ?', u1);
+    assert.equal(lancs.length, 0);
+  } finally {
+    ctx.fechar();
+  }
+});
+
+test('segurança IA: marcar_pago com descontar_saldo=false limpa conta_id', async () => {
+  const ctx = criarDbTeste();
+  try {
+    const u1 = await ctx.db.insert(
+      'INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)',
+      'Pedro',
+      'pedro@secia3.dev',
+      'hash'
+    );
+    const contaId = await ctx.db.insert(
+      'INSERT INTO contas (usuario_id, nome) VALUES (?, ?)',
+      u1,
+      'Nubank'
+    );
+    const lancId = await ctx.db.insert(
+      'INSERT INTO lancamentos (usuario_id, titulo, valor, tipo, data, status, conta_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      u1,
+      'Parcela Notebook',
+      300,
+      'divida',
+      '2026-11-26',
+      'pendente',
+      contaId
+    );
+
+    const { acao } = await criarPropostaAcao(
+      'propor_marcar_pago',
+      { lancamento_id: lancId, descontar_saldo: false },
+      u1,
+      { db: ctx.db, hojeIso: '2026-11-26' }
+    );
+
+    await confirmarAcaoPendente(acao.id, u1, { db: ctx.db });
+
+    const atualizado = await ctx.db.get(
+      'SELECT status, descontar_saldo, conta_id FROM lancamentos WHERE id = ?',
+      lancId
+    );
+    assert.equal(atualizado.status, 'pago');
+    assert.equal(atualizado.descontar_saldo, 0);
+    assert.equal(atualizado.conta_id, null);
+  } finally {
+    ctx.fechar();
+  }
+});

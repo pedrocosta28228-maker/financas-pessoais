@@ -5,6 +5,10 @@ import react from '@vitejs/plugin-react';
 // automaticamente para o nosso servidor Node.js (porta 3001).
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Nunca publicar mapas do código-fonte original (.map) em produção
+    sourcemap: false,
+  },
   server: {
     port: 5173,
     proxy: {

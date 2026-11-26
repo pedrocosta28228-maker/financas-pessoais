@@ -2,10 +2,56 @@ import crypto from 'node:crypto';
 import { db as dbPadrao } from './db.js';
 import { obterDataBrasilia } from './notificacoes.js';
 
+const MAX_TITULO = 120;
+const MAX_CATEGORIA = 60;
+const MAX_OBSERVACAO = 300;
+const MAX_ORIGEM = 80;
+const MAX_VALOR_FINANCEIRO = 100_000_000;
+const PRAZO_EXPIRACAO_ACAO_MS = 24 * 60 * 60 * 1000;
+
 function criarErroHttp(status, message) {
   const err = new Error(message);
   err.status = status;
   return err;
+}
+
+function parseTimestampMs(valor) {
+  if (!valor) return null;
+  if (valor instanceof Date) {
+    const ms = valor.getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  const texto = String(valor).trim();
+  if (!texto) return null;
+  // SQLite datetime('now', 'localtime') gera "YYYY-MM-DD HH:MM:SS"
+  const normalizado = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(texto)
+    ? texto.replace(' ', 'T')
+    : texto;
+  const ms = Date.parse(normalizado);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function validarValorPositivoSeguro(valorBruto, mensagemVazio = 'Informe um valor maior que zero.') {
+  const numero = Number(valorBruto);
+  if (!Number.isFinite(numero) || numero <= 0) {
+    throw criarErroHttp(400, mensagemVazio);
+  }
+  const arredondado = Math.round(numero * 100) / 100;
+  if (arredondado < 0.01) {
+    throw criarErroHttp(400, 'Informe um valor mínimo de R$ 0,01.');
+  }
+  if (arredondado > MAX_VALOR_FINANCEIRO) {
+    throw criarErroHttp(400, 'Valor excede o limite máximo permitido.');
+  }
+  return arredondado;
+}
+
+function validarTextoCurto(valor, maxLen, nomeCampo) {
+  const limpo = String(valor || '').trim();
+  if (limpo.length > maxLen) {
+    throw criarErroHttp(400, `${nomeCampo} pode ter no máximo ${maxLen} caracteres.`);
+  }
+  return limpo;
 }
 
 function formatarMoedaBr(valor) {
@@ -682,13 +728,10 @@ export async function criarPropostaAcao(
   let resumo;
 
   if (nome === 'propor_criar_lancamento') {
-    const titulo = String(args.titulo || '').trim();
-    const valor = Number(args.valor);
+    const titulo = validarTextoCurto(args.titulo, MAX_TITULO, 'O título');
+    const valorArredondado = validarValorPositivoSeguro(args.valor);
     const tipo = String(args.tipo || '').trim();
     if (!titulo) throw criarErroHttp(400, 'Informe um título para o lançamento.');
-    if (!Number.isFinite(valor) || valor <= 0) {
-      throw criarErroHttp(400, 'Informe um valor maior que zero.');
-    }
     if (!['entrada', 'saida', 'divida'].includes(tipo)) {
       throw criarErroHttp(400, 'Tipo inválido. Use entrada, saida ou divida.');
     }
@@ -699,9 +742,10 @@ export async function criarPropostaAcao(
         : hojeIso;
     const statusPadrao = tipo === 'divida' ? 'pendente' : 'pago';
     const status = ['pago', 'pendente'].includes(args.status) ? args.status : statusPadrao;
-    const categoria = String(args.categoria || '').trim() || 'Geral';
-    const observacao = String(args.observacao || '').trim();
-    const origemDivida = tipo === 'divida' ? String(args.origem_divida || '').trim() : '';
+    const categoria = validarTextoCurto(args.categoria, MAX_CATEGORIA, 'A categoria') || 'Geral';
+    const observacao = validarTextoCurto(args.observacao, MAX_OBSERVACAO, 'A observação');
+    const origemDivida =
+      tipo === 'divida' ? validarTextoCurto(args.origem_divida, MAX_ORIGEM, 'A origem da dívida') : '';
     const parcelas =
       tipo === 'divida' ? Math.max(1, Math.min(60, Math.floor(Number(args.parcelas) || 1))) : 1;
     if (parcelas > 1 && !['total', 'parcela'].includes(args.modo_valor_parcela)) {
@@ -718,7 +762,7 @@ export async function criarPropostaAcao(
     tipoAcao = 'criar_lancamento';
     payload = {
       titulo,
-      valor: Math.round(valor * 100) / 100,
+      valor: valorArredondado,
       tipo,
       categoria,
       data,
@@ -794,52 +838,50 @@ export async function criarPropostaAcao(
         : ' · Pago por fora do saldo';
     resumo = `Marcar como pago: ${lancamento.titulo} (${formatarMoedaBr(lancamento.valor)} · venc. ${formatarDataBr(lancamento.data)}${detalheConta})`;
   } else if (nome === 'propor_criar_meta') {
-    const titulo = String(args.titulo || '').trim();
-    const valorAlvo = Number(args.valor_alvo);
+    const titulo = validarTextoCurto(args.titulo, MAX_TITULO, 'O título da meta');
+    const valorAlvo = validarValorPositivoSeguro(
+      args.valor_alvo,
+      'Informe um valor alvo maior que zero.'
+    );
     const valorAtual = args.valor_atual !== undefined ? Number(args.valor_atual) : 0;
     if (!titulo) throw criarErroHttp(400, 'Informe um título para a meta.');
-    if (!Number.isFinite(valorAlvo) || valorAlvo <= 0) {
-      throw criarErroHttp(400, 'Informe um valor alvo maior que zero.');
-    }
-    if (!Number.isFinite(valorAtual) || valorAtual < 0) {
-      throw criarErroHttp(400, 'O valor atual da meta não pode ser negativo.');
+    if (!Number.isFinite(valorAtual) || valorAtual < 0 || valorAtual > MAX_VALOR_FINANCEIRO) {
+      throw criarErroHttp(400, 'O valor atual da meta é inválido.');
     }
     const prazo =
       typeof args.prazo === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.prazo)
         ? args.prazo
         : null;
+    const observacao = validarTextoCurto(args.observacao, MAX_OBSERVACAO, 'A observação');
     const conta = await resolverContaDoUsuario(args.conta_id, usuarioId, db);
 
     tipoAcao = 'criar_meta';
     payload = {
       titulo,
-      valor_alvo: Math.round(valorAlvo * 100) / 100,
+      valor_alvo: valorAlvo,
       valor_atual: Math.round(valorAtual * 100) / 100,
       prazo,
       conta_id: conta ? Number(conta.id) : null,
       conta_nome: conta ? conta.nome : null,
-      observacao: String(args.observacao || '').trim(),
+      observacao,
     };
 
     resumo = `Nova meta: ${titulo} — Alvo ${formatarMoedaBr(payload.valor_alvo)}${prazo ? ` · Prazo ${formatarDataBr(prazo)}` : ''}`;
   } else if (nome === 'propor_criar_despesa_fixa') {
-    const titulo = String(args.titulo || '').trim();
-    const valor = Number(args.valor);
+    const titulo = validarTextoCurto(args.titulo, MAX_TITULO, 'O título da despesa fixa');
+    const valor = validarValorPositivoSeguro(args.valor, 'Informe um valor mensal maior que zero.');
     const diaVencimento = Math.floor(Number(args.dia_vencimento));
     if (!titulo) throw criarErroHttp(400, 'Informe um título para a despesa fixa.');
-    if (!Number.isFinite(valor) || valor <= 0) {
-      throw criarErroHttp(400, 'Informe um valor mensal maior que zero.');
-    }
     if (!Number.isInteger(diaVencimento) || diaVencimento < 1 || diaVencimento > 31) {
       throw criarErroHttp(400, 'Informe um dia de vencimento entre 1 e 31.');
     }
-    const categoria = String(args.categoria || '').trim() || 'Moradia';
+    const categoria = validarTextoCurto(args.categoria, MAX_CATEGORIA, 'A categoria') || 'Moradia';
     const conta = await resolverContaDoUsuario(args.conta_id, usuarioId, db);
 
     tipoAcao = 'criar_despesa_fixa';
     payload = {
       titulo,
-      valor: Math.round(valor * 100) / 100,
+      valor,
       dia_vencimento: diaVencimento,
       categoria,
       conta_id: conta ? Number(conta.id) : null,
@@ -876,15 +918,19 @@ export async function criarPropostaAcao(
 
 /**
  * Confirma e executa uma ação pendente dentro de transação SQL.
- * Protege contra IDOR (usuario_id) e duplo clique (UPDATE condicional status = 'pendente').
+ * Protege contra IDOR (usuario_id), expiração (> 24h) e duplo clique (UPDATE condicional status = 'pendente').
  */
-export async function confirmarAcaoPendente(acaoId, usuarioId, { db = dbPadrao } = {}) {
+export async function confirmarAcaoPendente(
+  acaoId,
+  usuarioId,
+  { db = dbPadrao, agoraMs = Date.now() } = {}
+) {
   const id = Number(acaoId);
   if (!Number.isInteger(id) || id <= 0) {
     throw criarErroHttp(400, 'ID de ação inválido.');
   }
 
-  return db.transaction(async (tx) => {
+  const retorno = await db.transaction(async (tx) => {
     const existente = await tx.get(
       'SELECT * FROM agente_acoes_pendentes WHERE id = ? AND usuario_id = ?',
       id,
@@ -897,7 +943,18 @@ export async function confirmarAcaoPendente(acaoId, usuarioId, { db = dbPadrao }
       throw criarErroHttp(409, `Esta ação já foi ${existente.status}.`);
     }
 
-    const agoraIso = new Date().toISOString();
+    const criadoMs = parseTimestampMs(existente.criado_em);
+    if (criadoMs !== null && agoraMs - criadoMs > PRAZO_EXPIRACAO_ACAO_MS) {
+      await tx.run(
+        "UPDATE agente_acoes_pendentes SET status = 'cancelada', resolvido_em = ? WHERE id = ? AND usuario_id = ? AND status = 'pendente'",
+        new Date(agoraMs).toISOString(),
+        id,
+        usuarioId
+      );
+      return { expirada: true };
+    }
+
+    const agoraIso = new Date(agoraMs).toISOString();
     const lock = await tx.run(
       "UPDATE agente_acoes_pendentes SET status = 'confirmada', resolvido_em = ? WHERE id = ? AND usuario_id = ? AND status = 'pendente'",
       agoraIso,
@@ -993,7 +1050,7 @@ export async function confirmarAcaoPendente(acaoId, usuarioId, { db = dbPadrao }
       const contaIdFinal = contaValida ? Number(contaValida.id) : null;
 
       let upd;
-      if (payload.conta_id !== undefined && payload.conta_id !== null) {
+      if (descontarDb === 0 || (payload.conta_id !== undefined && payload.conta_id !== null)) {
         upd = await tx.run(
           "UPDATE lancamentos SET status = 'pago', descontar_saldo = ?, conta_id = ? WHERE id = ? AND usuario_id = ?",
           descontarDb,
@@ -1052,8 +1109,17 @@ export async function confirmarAcaoPendente(acaoId, usuarioId, { db = dbPadrao }
     );
 
     const atualizada = await tx.get('SELECT * FROM agente_acoes_pendentes WHERE id = ?', id);
-    return { acao: serializarAcao(atualizada), resultado };
+    return { expirada: false, acao: serializarAcao(atualizada), resultado };
   });
+
+  if (retorno.expirada) {
+    throw criarErroHttp(
+      410,
+      'Esta proposta expirou (mais de 24h). Peça ao assistente para preparar novamente.'
+    );
+  }
+
+  return { acao: retorno.acao, resultado: retorno.resultado };
 }
 
 /**
